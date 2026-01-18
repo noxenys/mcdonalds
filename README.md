@@ -149,9 +149,9 @@ docker-compose up -d
 | `TG_CHAT_ID` | ❌ | Owner 的 Telegram Chat ID (用于自动绑定 Owner Token) |
 | `DB_PATH` | ❌ | 数据库路径，默认 `users.db`。Zeabur/Northflank 请设为 `/app/data/users.db` |
 | `TZ` | ❌ | 时区设置，默认 `Asia/Shanghai`。Docker 部署建议检查此项。 |
-| `BARK_URL` | ❌ | Bark 推送链接 (Actions 模式用) |
+| `BARK_KEY` | ❌ | Bark 推送 Key (Actions 模式用) |
 | `FEISHU_WEBHOOK` | ❌ | 飞书 Webhook (Actions 模式用) |
-| `SERVERCHAN_KEY` | ❌ | Server酱 Key (Actions 模式用) |
+| `SERVERCHAN_SENDKEY` | ❌ | Server酱 SendKey (Actions 模式用) |
 
 ### ⚠️ 注意事项
 

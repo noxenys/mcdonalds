@@ -1,10 +1,7 @@
 import os
 import httpx
 import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import asyncio
 
 async def send_telegram(token, chat_id, message):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -90,8 +87,6 @@ async def push_all(message):
         tasks.append(send_serverchan(serverchan_key, message))
 
     if tasks:
-        await httpx.ASGITransport(app=None) # Just to ensure imports work if needed, mostly dummy here
-        import asyncio
         await asyncio.gather(*tasks)
     else:
         logger.info("No notification services configured. Skipping push.")
