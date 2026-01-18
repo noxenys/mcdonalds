@@ -69,15 +69,54 @@ async def list_campaign_calendar(token, date=None):
         arguments = {"date": date}
     return await call_mcp_tool(token, "campaign-calender", arguments=arguments, enable_push=False)
 
+from quotes import MCD_QUOTES
+import random
+
 async def get_today_recommendation(token):
     if not token or token == "your_token_here":
         return "Error: Invalid Token."
     today = time.strftime("%Y-%m-%d")
+    current_hour = int(time.strftime("%H"))
+    
     calendar_text = await list_campaign_calendar(token, today)
     available_text = await list_available_coupons(token)
+    
     lines = []
     lines.append(f"📅 今天是 {today}")
     lines.append("")
+    
+    # 1. 高亮推荐逻辑
+    highlights = []
+    if available_text:
+        # 简单关键词匹配
+        if "免费" in available_text or "0元" in available_text:
+            highlights.append("✨ **发现免费羊毛！** 赶紧看看列表！")
+        if "买一送一" in available_text or "1+1" in available_text:
+            highlights.append("🔥 **有买一送一活动！** 适合找人拼单。")
+        if "半价" in available_text:
+            highlights.append("💰 **半价优惠！** 四舍五入不要钱。")
+    
+    if highlights:
+        lines.append("\n".join(highlights))
+        lines.append("")
+
+    # 2. 时段推荐逻辑
+    time_tip = ""
+    if 5 <= current_hour < 10:
+        time_tip = "🍳 **早餐时段**：来个猪柳蛋堡唤醒灵魂吧！"
+    elif 11 <= current_hour < 14:
+        time_tip = "🍔 **午餐时段**：1+1随心配，最强穷鬼套餐。"
+    elif 14 <= current_hour < 17:
+        time_tip = "☕ **下午茶时段**：工作累了？点杯咖啡配个派。"
+    elif 17 <= current_hour < 21:
+        time_tip = "🍗 **晚餐时段**：今晚吃顿好的，对自己好一点。"
+    elif 21 <= current_hour or current_hour < 5:
+        time_tip = "🌙 **夜宵时段**：虽然会胖，但是炸鸡真香啊..."
+        
+    if time_tip:
+        lines.append(time_tip)
+        lines.append("")
+
     lines.append("【今天的活动】")
     calendar_error = False
     if not calendar_text:
@@ -106,10 +145,14 @@ async def get_today_recommendation(token):
         else:
             lines.append(available_text.strip())
     lines.append("")
+    
     if calendar_error and available_error:
         lines.append("当前暂时无法获取活动或优惠券的正常信息，可能是 MCP 服务短暂异常或网络问题，可以稍后再试一次。")
     else:
-        lines.append("小提示：可以优先关注包含“早餐”“午餐”“晚餐”“咖啡”等关键词的活动和优惠券，结合你实际的用餐时间选择最合适的一单。")
+        # 随机一句麦门文学
+        quote = random.choice(MCD_QUOTES)
+        lines.append(f"🍟 {quote}")
+        
     return "\n".join(lines)
 
 async def main():

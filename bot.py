@@ -348,11 +348,28 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     failed_count = total_failed or 0
     total = success_count + failed_count
 
+    # Gamification Logic
+    title = "🍔 麦当劳路人"
+    if success_count >= 10:
+        title = "🍟 麦门新徒"
+    if success_count >= 50:
+        title = "〽️ 金拱门长老"
+    if success_count >= 100:
+        title = "👑 麦当劳股东"
+    
+    # Lucky/Unlucky Logic
+    luck_status = ""
+    if total > 5 and failed_count > success_count:
+        luck_status = "\n(运势：😱 非酋附体，建议洗手)"
+    elif total > 5 and failed_count == 0:
+        luck_status = "\n(运势：✨ 欧皇降临)"
+
     msg = (
         "📈 你的领券统计：\n\n"
+        f"当前称号：{title}\n"
         f"总尝试次数：{total}\n"
         f"成功次数：{success_count}\n"
-        f"失败次数：{failed_count}\n"
+        f"失败次数：{failed_count}{luck_status}\n"
     )
 
     await update.message.reply_text(msg)
@@ -511,6 +528,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(msg)
 
 # Scheduler logic
+from quotes import MCD_QUOTES
+import random
+
 async def process_user_claim(application: Application, user_id, token, semaphore):
     async with semaphore:
         try:
@@ -526,6 +546,10 @@ async def process_user_claim(application: Application, user_id, token, semaphore
 
             if "error" in lower or "401" in result or "unauthorized" in lower:
                 message += "\n\n⚠️ 注意：你的 Token 可能已失效或无效，请重新发送新的 Token 进行绑定。"
+            elif success:
+                # Add random quote for successful claims
+                quote = random.choice(MCD_QUOTES)
+                message += f"\n\n🍟 {quote}"
 
             await application.bot.send_message(chat_id=user_id, text=message)
         except Exception as e:
