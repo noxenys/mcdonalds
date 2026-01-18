@@ -1,4 +1,31 @@
+import sys
+import subprocess
+import importlib
 import os
+
+# Runtime Dependency Self-Check (Hotfix)
+def check_and_install_packages():
+    required = {
+        'schedule': 'schedule',
+        'flask': 'flask',
+        'telegram': 'python-telegram-bot',
+        'sqlalchemy': 'sqlalchemy',
+        'dotenv': 'python-dotenv',
+        'mcp': 'mcp'
+    }
+    for module, package in required.items():
+        try:
+            importlib.import_module(module)
+        except ImportError:
+            print(f"⚠️  Missing runtime dependency: {module}. Auto-installing {package}...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+                print(f"✅  Installed {package}.")
+            except Exception as e:
+                print(f"❌  Failed to install {package}: {e}")
+
+check_and_install_packages()
+
 import logging
 import sqlite3
 import asyncio
@@ -926,11 +953,31 @@ def run_scheduler(application, loop):
 app = Flask(__name__)
 
 @app.route('/')
+@app.route('/health')
 def health_check():
-    return "McDonald's Coupon Bot is running! 🍔"
+    return "OK", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 7860))
+    port = int(os.environ.get("PORT", 8080))
+    timezone = os.environ.get("TZ", "Unknown (System Default)")
+    
+    # Check DB Status for logging
+    db_status = "Connected"
+    try:
+        # Simple connection check
+        with engine.connect() as conn:
+            pass
+    except Exception as e:
+        db_status = f"Error: {str(e)}"
+
+    print(f"\n🚀 Starting Flask server on port {port}...")
+    print(f"🌍 Current Timezone: {timezone}")
+    print(f"💾 Database Status: {db_status}")
+    
+    # Disable standard Flask logs to avoid clutter
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
     app.run(host='0.0.0.0', port=port)
 
 def main():

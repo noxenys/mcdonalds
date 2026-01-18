@@ -74,14 +74,39 @@ services:
 docker-compose up -d
 ```
 搞定！Bot 已经跑起来了。
-
-### 3. (可选) 手动编译
-如果你想自己修改代码运行：
+### 3. (可选) 手动编译 (推荐)
+如果你想使用最新代码，或者遇到依赖问题（如 `schedule` 模块缺失）：
 1. `git clone` 本仓库。
-2. 修改 `.env`。
+2. 修改 `docker-compose.yml`，确保使用 `build: .` 而不是 `image: ...`。
 3. `docker-compose up -d --build`。
 
-### 4. 使用方法
+---
+
+## ☁️ 场景三：PaaS 部署 (Zeabur/Render)
+
+本仓库针对 Zeabur 等 PaaS 平台进行了优化。
+
+### Zeabur 部署
+
+1. 在 Zeabur 中创建新项目。
+2. 选择 **Deploy New Service** -> **Git**。
+3. 选择你 Fork 的仓库。
+4. Zeabur 会自动识别 `Dockerfile` 并开始构建。
+   - **注意**：我们建议使用 **源码部署** (Source Code)，即让 Zeabur 读取仓库中的 `Dockerfile` 进行构建，以确保所有依赖被正确安装。
+5. 在服务的 **Variables** 中添加环境变量：
+   - `TG_BOT_TOKEN`: 你的 Telegram Bot Token
+   - `TZ`: `Asia/Shanghai` (确保时间正确)
+6. 部署成功！
+
+### 版本化镜像发布（publish.sh）
+
+- 你也可以使用仓库根目录下的 `publish.sh`：
+  - 本地构建并推送镜像到 `ghcr.io/noxenys/mcdonalds`（同时更新 `latest` 与带时间戳的版本号）。
+  - 自动更新 `docker-compose.yml` 中的 `image:` 标签为新版本，方便 Zeabur 等平台总是拉取最新镜像。
+
+---
+
+## 🛠️ 命令列表 / 使用方法
 1. 在 Telegram 上找到你的 Bot。
 2. 发送 `/start` 或 `/menu` 打开按钮菜单。
 3. 直接发送 **MCP Token** 给 Bot，或使用 `/token <你的MCP Token>` 命令。
