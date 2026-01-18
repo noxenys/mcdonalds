@@ -12,7 +12,14 @@ class TelegraphService:
         # Try to load token from environment or file if we wanted persistence, 
         # but for now we can create a new one or keep it in memory.
         # Ideally, we should cache this token.
-        self.token_file = "telegraph_token.json"
+        token_dir = os.path.join("data")
+        if not os.path.exists(token_dir):
+            try:
+                os.makedirs(token_dir)
+            except Exception as e:
+                print(f"Error creating telegraph token directory: {e}")
+                token_dir = "."
+        self.token_file = os.path.join(token_dir, "telegraph_token.json")
         self._load_token()
 
     def _load_token(self):

@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     # Fallback to SQLite
-    DB_FILE = os.getenv("DB_PATH", "users.db")
+    default_db_path = os.path.join("data", "users.db")
+    DB_FILE = os.getenv("DB_PATH", default_db_path)
     db_dir = os.path.dirname(DB_FILE)
     if db_dir and not os.path.exists(db_dir):
         try:
