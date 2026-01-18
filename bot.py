@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
-from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation
+from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message
 
 async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: int = 3500):
     if not text:
@@ -660,6 +660,10 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         text_result = raw_result
 
+    if isinstance(text_result, str) and is_mcp_error_message(text_result):
+        await update.message.reply_text("今天麦当劳 MCP 服务似乎出问题了，我暂时查不到活动日历，可以稍后再试一次 /calendar。")
+        return
+
     if not calendar_nodes and not text_result:
         await update.message.reply_text("暂未查询到活动信息。")
     else:
@@ -713,6 +717,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("🤖 正在结合活动日历和可领优惠券为你生成今天的用券建议，请稍等...")
     try:
         result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
+        if is_mcp_error_message(result):
+            await update.message.reply_text("今天麦当劳 MCP 服务似乎挂了，我暂时没法生成今日推荐，可以稍后再试一次 /today。")
+            return
         raw_calendar = await list_campaign_calendar(token, return_raw=True)
         sanitized = sanitize_text(result)
         page_url = None
@@ -1160,6 +1167,9 @@ async def process_user_today(application: Application, user_id, token, semaphore
         try:
             logger.info(f"Generating today recommendation for user {user_id}")
             result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
+            if is_mcp_error_message(result):
+                await safe_bot_send_message(application.bot, user_id, "今天麦当劳 MCP 服务似乎挂了，我暂时没法生成今日推荐，可以稍后再试一次。")
+                return
             raw_calendar = await list_campaign_calendar(token, return_raw=True)
             page_url = None
             try:
