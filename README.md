@@ -47,20 +47,34 @@
 - 申请一个 Telegram Bot Token (找 @BotFather)。
 - 确保服务器安装了 Docker。
 
-### 2. 配置
-修改 `.env` 文件 (复制 `.env.example` 重命名)：
-```ini
-# 必须配置
-TG_BOT_TOKEN=你的_Telegram_Bot_Token
+### 2. 快速启动 (使用官方镜像)
+不需要下载代码，直接创建一个 `docker-compose.yml` 文件：
 
-# 可选：如果你自己也想通过环境变量配置(不走Bot对话)，可以填这个
-MCD_MCP_TOKEN=你的麦当劳Token
+```yaml
+version: '3.8'
+services:
+  mcdonalds-bot:
+    image: ghcr.io/noxenys/mcdonalds:latest
+    container_name: mcd_bot
+    restart: always
+    environment:
+      - TG_BOT_TOKEN=你的BotToken
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data  # 挂载数据目录，防止重启丢失用户数据
 ```
 
-### 3. 启动
+然后在同级目录下运行：
 ```bash
 docker-compose up -d
 ```
+搞定！Bot 已经跑起来了。
+
+### 3. (可选) 手动编译
+如果你想自己修改代码运行：
+1. `git clone` 本仓库。
+2. 修改 `.env`。
+3. `docker-compose up -d --build`。
 
 ### 4. 使用方法
 1. 在 Telegram 上找到你的 Bot。
