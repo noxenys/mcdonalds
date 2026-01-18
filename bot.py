@@ -173,8 +173,8 @@ def get_admin_summary():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
         ["🍟 立即领券", "📅 今日推荐"],
-        ["🎟️ 我的券包", "📊 领券统计"],
-        ["⚙️ 账号管理", "ℹ️ 帮助/状态"]
+        ["🎟️ 我的券包", "📜 可领列表"],
+        ["📊 领券统计", "⚙️ 账号管理", "ℹ️ 帮助/状态"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -232,6 +232,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     elif text == "🎟️ 我的券包":
         await my_coupons_command(update, context)
+        return
+    elif text == "📜 可领列表":
+        await coupons_command(update, context)
         return
     elif text == "📊 领券统计":
         await stats_command(update, context)
