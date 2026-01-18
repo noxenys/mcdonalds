@@ -21,8 +21,23 @@ def cleanup_for_telegram(text):
     """
     lines = []
     
-    # Pre-process: split by common separators if needed, but usually lines are fine.
     raw_lines = text.splitlines()
+
+    # Strip tool级别的 Markdown 提示头
+    cleaned_raw = []
+    skipping_header = True
+    for line in raw_lines:
+        stripped = line.strip()
+        if skipping_header:
+            if not stripped:
+                continue
+            if "Client 支持 Markdown 渲染" in stripped:
+                continue
+            if stripped.startswith("### 当前时间") or stripped.startswith("当前时间：") or stripped.startswith("当前时间:"):
+                continue
+            skipping_header = False
+        cleaned_raw.append(line)
+    raw_lines = cleaned_raw
     
     current_coupon = {}
     coupons = []
@@ -59,8 +74,10 @@ def cleanup_for_telegram(text):
             status = line.split("：", 1)[1].strip()
             current_coupon['status'] = status
             
-        # Ignore image lines and raw image URLs
-        elif "<img" in line or "http" in line or "优惠券图片" in line:
+        # Ignore noisy lines that只包含图片说明或纯链接
+        elif "优惠券图片" in line:
+            continue
+        elif line.strip().startswith("http"):
             continue
             
         # Keep other text that might be relevant (but avoid duplicates)
@@ -88,9 +105,6 @@ def cleanup_for_telegram(text):
     # Fallback for non-coupon text (original logic optimized)
     cleaned = []
     for line in raw_lines:
-        # Remove image tags completely for cleaner text
-        if "<img" in line:
-            continue
         # Remove lines that are just URLs
         if line.strip().startswith("http"):
             continue
