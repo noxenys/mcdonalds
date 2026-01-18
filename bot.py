@@ -493,8 +493,14 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
         return
     await update.message.reply_text("🤖 正在结合活动日历和可领优惠券为你生成今天的用券建议，请稍等...")
-    result = await get_today_recommendation(token)
-    await update.message.reply_text(result, parse_mode='Markdown')
+    try:
+        result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
+        await update.message.reply_text(result, parse_mode='Markdown')
+    except asyncio.TimeoutError:
+        await update.message.reply_text(
+            "⏰ 今日推荐生成超时，可能是麦当劳 MCP 服务响应过慢。\n"
+            "你可以先使用 /coupons 和 /calendar 单独查看，稍后再试 /today。"
+        )
 
 async def coupons_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id

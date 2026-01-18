@@ -42,13 +42,16 @@ def cleanup_for_telegram(text):
             continue
 
         # Parse coupon fields
-        if line.startswith("- 优惠券标题：") or line.startswith("优惠券标题："):
+        if line.startswith("- 优惠券标题：") or line.startswith("优惠券标题：") or line.startswith("## "):
             # Save previous coupon if exists
             if current_coupon:
                 coupons.append(current_coupon)
                 current_coupon = {}
-            
-            title = line.split("：", 1)[1].strip()
+
+            if line.startswith("## "):
+                title = line.lstrip("#").strip()
+            else:
+                title = line.split("：", 1)[1].strip()
             current_coupon['title'] = title
             
         elif line.startswith("- 状态：") or line.startswith("状态："):
@@ -103,18 +106,23 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
         "MCP-Protocol-Version": "2025-06-18",
     }
 
-    print(f"Connecting to McDonald's MCP Server at {MCP_SERVER_URL}...")
+    print(f"[MCP] Connecting to {MCP_SERVER_URL} tool={tool_name}...")
 
     try:
         async def _request_mcp():
+            start_ts = time.time()
             async with streamablehttp_client(MCP_SERVER_URL, headers=headers) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
 
                     if arguments is None:
-                        return await session.call_tool(tool_name)
+                        result = await session.call_tool(tool_name)
                     else:
-                        return await session.call_tool(tool_name, arguments=arguments)
+                        result = await session.call_tool(tool_name, arguments=arguments)
+
+            cost = time.time() - start_ts
+            print(f"[MCP] tool={tool_name} finished in {cost:.1f}s")
+            return result
 
         # Set 60s timeout for the MCP interaction
         result = await asyncio.wait_for(_request_mcp(), timeout=60)
@@ -162,7 +170,7 @@ async def list_my_coupons(token):
 async def list_campaign_calendar(token, date=None, return_raw=False):
     arguments = None
     if date:
-        arguments = {"date": date}
+        arguments = {"specifiedDate": date}
     
     if return_raw:
         content_list = await call_mcp_tool(token, "campaign-calender", arguments=arguments, enable_push=False, return_raw_content=True)
@@ -196,9 +204,11 @@ async def get_today_recommendation(token):
         return "Error: Invalid Token."
     today = time.strftime("%Y-%m-%d")
     current_hour = int(time.strftime("%H"))
-    
-    calendar_text = await list_campaign_calendar(token, today)
-    available_text = await list_available_coupons(token)
+   
+    calendar_text, available_text = await asyncio.gather(
+        list_campaign_calendar(token),
+        list_available_coupons(token)
+    )
     
     lines = []
     lines.append(f"📅 今天是 {today}")
