@@ -14,31 +14,84 @@ load_dotenv()
 MCP_SERVER_URL = "https://mcp.mcd.cn/mcp-servers/mcd-mcp"
 
 def cleanup_for_telegram(text):
+    """
+    Cleans up and formats the text for better Telegram display.
+    Specifically targets coupon lists to remove redundancy and image URLs.
+    """
     lines = []
-    for line in text.splitlines():
-        if "<img" in line:
-            src_match = re.search(r'src="([^"]+)"', line)
-            alt_match = re.search(r'alt="([^"]*)"', line)
-            url = src_match.group(1) if src_match else ""
-            alt_text = alt_match.group(1) if alt_match else ""
-            if url:
-                if alt_text:
-                    line = f"- 图片：{alt_text} {url}"
-                else:
-                    line = f"- 图片：{url}"
-            else:
-                line = line.split("<img")[0].rstrip()
-        lines.append(line)
+    
+    # Pre-process: split by common separators if needed, but usually lines are fine.
+    raw_lines = text.splitlines()
+    
+    current_coupon = {}
+    coupons = []
+    
+    is_coupon_list = False
+    
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Detect if this is likely a coupon list output
+        if "优惠券列表" in line or "优惠券标题" in line:
+            is_coupon_list = True
+            
+        if not is_coupon_list:
+            lines.append(line)
+            continue
+
+        # Parse coupon fields
+        if line.startswith("- 优惠券标题：") or line.startswith("优惠券标题："):
+            # Save previous coupon if exists
+            if current_coupon:
+                coupons.append(current_coupon)
+                current_coupon = {}
+            
+            title = line.split("：", 1)[1].strip()
+            current_coupon['title'] = title
+            
+        elif line.startswith("- 状态：") or line.startswith("状态："):
+            status = line.split("：", 1)[1].strip()
+            current_coupon['status'] = status
+            
+        # Ignore image lines and raw image URLs
+        elif "<img" in line or "http" in line or "优惠券图片" in line:
+            continue
+            
+        # Keep other text that might be relevant (but avoid duplicates)
+        elif current_coupon and line != current_coupon.get('title'):
+             pass # Skip simple duplicates
+
+    # Append the last coupon
+    if current_coupon:
+        coupons.append(current_coupon)
+
+    # If we successfully parsed coupons, format them nicely
+    if coupons:
+        # Add any header lines found before the list
+        result = "\n".join(lines) + "\n\n"
+        
+        for i, c in enumerate(coupons, 1):
+            title = c.get('title', '未知优惠券')
+            # status = c.get('status', '') # Status is usually "已领取" or similar, maybe not needed if it's "available coupons"
+            
+            # Simple format: 1. Title
+            result += f"{i}. {title}\n"
+            
+        return result.strip()
+
+    # Fallback for non-coupon text (original logic optimized)
     cleaned = []
-    prev_blank = False
-    for line in lines:
-        if line.strip() == "":
-            if prev_blank:
-                continue
-            prev_blank = True
-        else:
-            prev_blank = False
+    for line in raw_lines:
+        # Remove image tags completely for cleaner text
+        if "<img" in line:
+            continue
+        # Remove lines that are just URLs
+        if line.strip().startswith("http"):
+            continue
         cleaned.append(line)
+        
     return "\n".join(cleaned).strip()
 
 async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, return_raw_content=False):
