@@ -50,9 +50,13 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False):
                 return result_message
                     
     except Exception as e:
-        error_msg = f"An error occurred: {e}"
-        print(error_msg)
-        return error_msg
+        raw = str(e)
+        if "429" in raw:
+            friendly = f"麦当劳 MCP 接口返回 429（请求过于频繁），请稍后再试。\n详细信息：{raw}"
+        else:
+            friendly = f"麦当劳 MCP 服务当前出现异常，可能在维护或短暂故障，请稍后再试。\n详细信息：{raw}"
+        print(friendly)
+        return friendly
 
 async def claim_for_token(token, enable_push=True):
     return await call_mcp_tool(token, "auto-bind-coupons", enable_push=enable_push)
