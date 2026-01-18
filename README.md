@@ -112,9 +112,12 @@ docker-compose up -d
 
 1. 创建一个新的 **Space**，SDK 选择 **Docker**。
 2. 将本仓库代码上传（或 Clone）。
-3. 在 Space 的 **Settings** -> **Variables and secrets** 中添加 Secret：
+3. 在 Space 的 **Settings** -> **Variables and secrets** 中添加：
    - `TG_BOT_TOKEN`: 你的 Telegram Bot Token
-4. 部署完成后，Bot 即可在线。
+   - （推荐）`DATABASE_URL`: 你的 PostgreSQL 连接串（例如 `postgresql://user:password@host:5432/dbname`），用于持久化存储用户数据
+   - （可选）`DB_PATH`: SQLite 数据库路径，默认 `users.db`。如果你在 HF 开启了 Persistent Storage，请设为 `/data/users.db`，把数据库放到持久盘中
+4. 如果你**不配置 `DATABASE_URL` 且未使用 Persistent Storage**，Space 重启或重置后本地 SQLite 文件会被清空，所有已绑定的用户都会丢失，仅适合测试使用。
+5. 部署完成后，Bot 即可在线。
 
 ### 🚀 Koyeb
 
@@ -122,8 +125,10 @@ docker-compose up -d
 2. 选择 **GitHub** 部署，连接你的仓库。
 3. 在 **Environment Variables** 中添加：
    - `TG_BOT_TOKEN`: 你的 Telegram Bot Token
-   - `PORT`: 8000 (可选)
-4. 部署即可。
+   - `DATABASE_URL`: 你的 PostgreSQL 连接串（例如 `postgresql://user:password@host:5432/dbname`）
+   - `TZ`: `Asia/Shanghai` (可选)
+   - `PORT`: `8000` (可选，Koyeb 通常会自动注入)
+4. 部署即可。**强烈建议配置 `DATABASE_URL`，因为 Koyeb Free 实例不支持挂载 Volume，直接使用 SQLite 会导致重启后数据丢失。**
 
 ### 🚀 Zeabur / Northflank (解决数据丢失问题)
 这些平台也支持 Docker，但默认情况下重启会丢失数据。你需要挂载一个 Volume (存储卷) 来保存数据库。
