@@ -70,7 +70,7 @@ class TelegraphService:
             if not self.access_token:
                 return None
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 # content needs to be serialized to JSON string
                 content_json = json.dumps(content_nodes)

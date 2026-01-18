@@ -53,19 +53,23 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
     print(f"Connecting to McDonald's MCP Server at {MCP_SERVER_URL}...")
 
     try:
-        async with streamablehttp_client(MCP_SERVER_URL, headers=headers) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
+        async def _request_mcp():
+            async with streamablehttp_client(MCP_SERVER_URL, headers=headers) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
 
-                if arguments is None:
-                    result = await session.call_tool(tool_name)
-                else:
-                    result = await session.call_tool(tool_name, arguments=arguments)
+                    if arguments is None:
+                        return await session.call_tool(tool_name)
+                    else:
+                        return await session.call_tool(tool_name, arguments=arguments)
 
-                if return_raw_content:
-                    return result.content
+        # Set 60s timeout for the MCP interaction
+        result = await asyncio.wait_for(_request_mcp(), timeout=60)
 
-                print("\nExecution Result:")
+        if return_raw_content:
+            return result.content
+
+        print("\nExecution Result:")
                 result_message = ""
                 for content in result.content:
                     if content.type == "text":
