@@ -171,11 +171,18 @@ def get_admin_summary():
 
 # Bot Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = [
+        ["🍟 立即领券", "📅 今日推荐"],
+        ["🎟️ 我的券包", "📊 领券统计"],
+        ["⚙️ 账号管理", "ℹ️ 帮助/状态"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     await update.message.reply_text(
         "👋 欢迎使用麦当劳自动领券 Bot！\n\n"
         "请先发送你的 MCP Token 给我完成绑定。\n"
         "获取地址：https://open.mcd.cn/mcp/console\n\n"
-        "常用命令：\n"
+        "你可以直接使用底部的菜单按钮，也可以使用以下命令：\n"
         "/claim - 立即领券\n"
         "/coupons - 查看当前可领优惠券\n"
         "/mycoupons - 查看你已拥有的优惠券\n"
@@ -187,7 +194,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/account add/use/list/del - 多账号管理\n"
         "/unbind - 解除绑定\n"
         "/admin - 管理员总览\n"
-        "/help - 查看帮助"
+        "/help - 查看帮助",
+        reply_markup=reply_markup
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -214,6 +222,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = update.message.text.strip()
     user_id = update.effective_user.id
     username = update.effective_user.username
+
+    # Handle Menu Buttons
+    if text == "🍟 立即领券":
+        await claim_command(update, context)
+        return
+    elif text == "📅 今日推荐":
+        await today_command(update, context)
+        return
+    elif text == "🎟️ 我的券包":
+        await my_coupons_command(update, context)
+        return
+    elif text == "📊 领券统计":
+        await stats_command(update, context)
+        return
+    elif text == "⚙️ 账号管理":
+        await account_command(update, context)
+        return
+    elif text == "ℹ️ 帮助/状态":
+        await status_command(update, context)
+        return
 
     if len(text) > 20 and not text.startswith('/'):
         await update.message.reply_text("🔍 正在验证你的 Token，请稍等...")
@@ -513,6 +541,28 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         application = context.application
         application.create_task(scheduled_job(application))
         await update.message.reply_text("🚀 已开始执行一次全量自动领券任务。")
+        return
+    
+    if args and args[0].lower() == "broadcast":
+        if len(args) < 2:
+            await update.message.reply_text("⚠️ 用法：/admin broadcast <消息内容>")
+            return
+        
+        message = " ".join(args[1:])
+        users = get_all_users()
+        count = 0
+        
+        await update.message.reply_text(f"📣 正在向 {len(users)} 位用户发送广播...")
+        
+        for uid, _ in users:
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"📢 管理员通知：\n\n{message}")
+                count += 1
+                await asyncio.sleep(0.1) # Avoid flooding
+            except Exception as e:
+                logger.error(f"Failed to broadcast to {uid}: {e}")
+                
+        await update.message.reply_text(f"✅ 广播完成，成功发送给 {count} 位用户。")
         return
 
     total_users, auto_users, total_success, total_failed = get_admin_summary()
