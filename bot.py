@@ -11,6 +11,11 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation
 
+# SQLAlchemy imports
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, func, text, BigInteger
+from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
+from sqlalchemy.exc import OperationalError
+
 # Load environment variables
 load_dotenv()
 
@@ -21,9 +26,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DB_FILE = os.getenv("DB_PATH", "users.db")
-
-def init_db():
+# Database Configuration
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    # Fallback to SQLite
+    DB_FILE = os.getenv("DB_PATH", "users.db")
     db_dir = os.path.dirname(DB_FILE)
     if db_dir and not os.path.exists(db_dir):
         try:
@@ -31,143 +38,233 @@ def init_db():
             logger.info(f"Created database directory: {db_dir}")
         except OSError as e:
             logger.error(f"Failed to create database directory {db_dir}: {e}")
+    DATABASE_URL = f"sqlite:///{DB_FILE}"
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, username TEXT, mcp_token TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+logger.info(f"Using Database: {DATABASE_URL.split('://')[0]}://...")
 
-    alter_statements = [
-        "ALTER TABLE users ADD COLUMN auto_claim_enabled INTEGER DEFAULT 1",
-        "ALTER TABLE users ADD COLUMN last_claim_at TIMESTAMP",
-        "ALTER TABLE users ADD COLUMN last_claim_success INTEGER",
-        "ALTER TABLE users ADD COLUMN total_success INTEGER DEFAULT 0",
-        "ALTER TABLE users ADD COLUMN total_failed INTEGER DEFAULT 0"
-    ]
+# SQLAlchemy Setup
+Base = declarative_base()
 
-    for stmt in alter_statements:
-        try:
-            c.execute(stmt)
-        except sqlite3.OperationalError:
-            pass
+class User(Base):
+    __tablename__ = 'users'
+    user_id = Column(BigInteger, primary_key=True)
+    username = Column(String)
+    mcp_token = Column(String)
+    created_at = Column(DateTime, server_default=func.now())
+    auto_claim_enabled = Column(Integer, default=1)
+    last_claim_at = Column(DateTime)
+    last_claim_success = Column(Integer)
+    total_success = Column(Integer, default=0)
+    total_failed = Column(Integer, default=0)
 
-    c.execute('''CREATE TABLE IF NOT EXISTS accounts
-                 (user_id INTEGER, name TEXT, mcp_token TEXT, is_active INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, name))''')
+class Account(Base):
+    __tablename__ = 'accounts'
+    # Composite primary key manually handled or use id
+    # Original schema: PRIMARY KEY (user_id, name)
+    user_id = Column(BigInteger, primary_key=True)
+    name = Column(String, primary_key=True)
+    mcp_token = Column(String)
+    is_active = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now())
 
-    conn.commit()
-    conn.close()
+engine = create_engine(DATABASE_URL)
+SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+
+def init_db():
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables verified/created.")
+        
+        # Check for schema updates (columns added later)
+        # This is a basic migration check for existing SQLite users migrating to newer version
+        # For Postgres, create_all handles creation, but ALTERS need manual handling or migration tools.
+        # Here we just try to add columns if they might be missing in old SQLite files.
+        # For a proper production app, use Alembic.
+        if "sqlite" in DATABASE_URL:
+            with engine.connect() as conn:
+                alter_statements = [
+                    "ALTER TABLE users ADD COLUMN auto_claim_enabled INTEGER DEFAULT 1",
+                    "ALTER TABLE users ADD COLUMN last_claim_at TIMESTAMP",
+                    "ALTER TABLE users ADD COLUMN last_claim_success INTEGER",
+                    "ALTER TABLE users ADD COLUMN total_success INTEGER DEFAULT 0",
+                    "ALTER TABLE users ADD COLUMN total_failed INTEGER DEFAULT 0"
+                ]
+                for stmt in alter_statements:
+                    try:
+                        conn.execute(text(stmt))
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.error(f"Database initialization error: {e}")
+
+# Helper to get session
+def get_db():
+    return SessionLocal()
+
+# --- Database Access Layer (Refactored to use SQLAlchemy) ---
 
 def get_active_account(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT name, mcp_token FROM accounts WHERE user_id=? AND is_active=1 LIMIT 1", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return row
+    session = get_db()
+    try:
+        account = session.query(Account).filter(Account.user_id == user_id, Account.is_active == 1).first()
+        if account:
+            return (account.name, account.mcp_token)
+        return None
+    finally:
+        session.close()
 
 def get_accounts(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT name, mcp_token, is_active FROM accounts WHERE user_id=?", (user_id,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    session = get_db()
+    try:
+        accounts = session.query(Account).filter(Account.user_id == user_id).all()
+        return [(acc.name, acc.mcp_token, acc.is_active) for acc in accounts]
+    finally:
+        session.close()
 
 def upsert_account(user_id, name, token, set_active):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO accounts (user_id, name, mcp_token, is_active) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, name) DO UPDATE SET mcp_token=excluded.mcp_token", (user_id, name, token, 1 if set_active else 0))
-    if set_active:
-        c.execute("UPDATE accounts SET is_active=0 WHERE user_id=? AND name!=?", (user_id, name))
-    conn.commit()
-    conn.close()
+    session = get_db()
+    try:
+        account = session.query(Account).filter(Account.user_id == user_id, Account.name == name).first()
+        if account:
+            account.mcp_token = token
+            if set_active:
+                # Deactivate others
+                session.query(Account).filter(Account.user_id == user_id).update({"is_active": 0})
+                account.is_active = 1
+        else:
+            if set_active:
+                session.query(Account).filter(Account.user_id == user_id).update({"is_active": 0})
+            account = Account(user_id=user_id, name=name, mcp_token=token, is_active=1 if set_active else 0)
+            session.add(account)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in upsert_account: {e}")
+    finally:
+        session.close()
 
 def set_active_account(user_id, name):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE accounts SET is_active=1 WHERE user_id=? AND name=?", (user_id, name))
-    c.execute("UPDATE accounts SET is_active=0 WHERE user_id=? AND name!=?", (user_id, name))
-    conn.commit()
-    conn.close()
+    session = get_db()
+    try:
+        session.query(Account).filter(Account.user_id == user_id).update({"is_active": 0})
+        session.query(Account).filter(Account.user_id == user_id, Account.name == name).update({"is_active": 1})
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in set_active_account: {e}")
+    finally:
+        session.close()
 
 def get_user_token(user_id):
     active_account = get_active_account(user_id)
     if active_account:
         return active_account[1]
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT mcp_token FROM users WHERE user_id=?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else None
+    
+    session = get_db()
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        return user.mcp_token if user else None
+    finally:
+        session.close()
 
 def save_user_token(user_id, username, token):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO users (user_id, username, mcp_token, auto_claim_enabled) VALUES (?, ?, ?, 1) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, mcp_token=excluded.mcp_token", (user_id, username, token))
-    conn.commit()
-    conn.close()
-    upsert_account(user_id, "default", token, True)
+    session = get_db()
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if user:
+            user.username = username
+            user.mcp_token = token
+            # Ensure auto_claim is enabled if it was null (though default handles it)
+        else:
+            user = User(user_id=user_id, username=username, mcp_token=token, auto_claim_enabled=1)
+            session.add(user)
+        session.commit()
+        
+        # Also sync to default account
+        upsert_account(user_id, "default", token, True)
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in save_user_token: {e}")
+    finally:
+        session.close()
 
 def delete_user_token(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
+    session = get_db()
+    try:
+        session.query(User).filter(User.user_id == user_id).delete()
+        session.query(Account).filter(Account.user_id == user_id).delete()
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in delete_user_token: {e}")
+    finally:
+        session.close()
 
 def get_all_users():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT user_id, mcp_token FROM users WHERE auto_claim_enabled IS NULL OR auto_claim_enabled=1")
-    users = c.fetchall()
-    conn.close()
-    return users
+    session = get_db()
+    try:
+        # auto_claim_enabled IS NULL OR auto_claim_enabled=1
+        users = session.query(User).filter((User.auto_claim_enabled == None) | (User.auto_claim_enabled == 1)).all()
+        return [(u.user_id, u.mcp_token) for u in users]
+    finally:
+        session.close()
 
 def set_auto_claim_enabled(user_id, enabled):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE users SET auto_claim_enabled=? WHERE user_id=?", (1 if enabled else 0, user_id))
-    conn.commit()
-    conn.close()
+    session = get_db()
+    try:
+        val = 1 if enabled else 0
+        session.query(User).filter(User.user_id == user_id).update({"auto_claim_enabled": val})
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in set_auto_claim_enabled: {e}")
+    finally:
+        session.close()
 
 def get_user_stats_and_status(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "SELECT username, auto_claim_enabled, last_claim_at, last_claim_success, total_success, total_failed, created_at "
-        "FROM users WHERE user_id=?",
-        (user_id,)
-    )
-    row = c.fetchone()
-    conn.close()
-    return row
+    session = get_db()
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if user:
+            return (user.username, user.auto_claim_enabled, user.last_claim_at, 
+                    user.last_claim_success, user.total_success, user.total_failed, user.created_at)
+        return None
+    finally:
+        session.close()
 
 def update_claim_stats(user_id, success):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE users SET last_claim_at=CURRENT_TIMESTAMP, last_claim_success=?, "
-        "total_success=COALESCE(total_success,0)+?, total_failed=COALESCE(total_failed,0)+? "
-        "WHERE user_id=?",
-        (1 if success else 0, 1 if success else 0, 0 if success else 1, user_id)
-    )
-    conn.commit()
-    conn.close()
+    session = get_db()
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if user:
+            user.last_claim_at = func.now()
+            user.last_claim_success = 1 if success else 0
+            user.total_success = (user.total_success or 0) + (1 if success else 0)
+            user.total_failed = (user.total_failed or 0) + (0 if success else 1)
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in update_claim_stats: {e}")
+    finally:
+        session.close()
 
 def get_admin_summary():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0] or 0
-    c.execute("SELECT COUNT(*) FROM users WHERE auto_claim_enabled IS NULL OR auto_claim_enabled=1")
-    auto_users = c.fetchone()[0] or 0
-    c.execute("SELECT COALESCE(SUM(total_success),0), COALESCE(SUM(total_failed),0) FROM users")
-    row = c.fetchone()
-    total_success = row[0] if row and row[0] is not None else 0
-    total_failed = row[1] if row and row[1] is not None else 0
-    conn.close()
-    return total_users, auto_users, total_success, total_failed
+    session = get_db()
+    try:
+        total_users = session.query(User).count()
+        auto_users = session.query(User).filter((User.auto_claim_enabled == None) | (User.auto_claim_enabled == 1)).count()
+        
+        result = session.query(
+            func.sum(User.total_success),
+            func.sum(User.total_failed)
+        ).first()
+        
+        total_success = result[0] or 0
+        total_failed = result[1] or 0
+        
+        return total_users, auto_users, int(total_success), int(total_failed)
+    finally:
+        session.close()
 
 # Bot Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

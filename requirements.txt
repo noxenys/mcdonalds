@@ -4,3 +4,5 @@ python-dotenv
 schedule
 python-telegram-bot
 flask
+sqlalchemy
+psycopg2-binary

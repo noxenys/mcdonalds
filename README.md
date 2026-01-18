@@ -147,7 +147,8 @@ docker-compose up -d
 | `TG_BOT_TOKEN` | ✅ | Telegram Bot Token (Bot 模式必填) |
 | `MCD_MCP_TOKEN` | ❌ | 麦当劳 Token (Actions 模式必填；Bot 模式选填，填了会自动绑定给 Owner) |
 | `TG_CHAT_ID` | ❌ | Owner 的 Telegram Chat ID (用于自动绑定 Owner Token) |
-| `DB_PATH` | ❌ | 数据库路径，默认 `users.db`。Zeabur/Northflank 请设为 `/app/data/users.db` |
+| `DATABASE_URL` | ❌ | PostgreSQL 数据库连接串 (例如 `postgres://...`)，配置此项后将不再使用 SQLite，适合 Koyeb 等无持久化存储的平台。 |
+| `DB_PATH` | ❌ | SQLite 数据库路径，默认 `users.db`。Zeabur/Northflank 请设为 `/app/data/users.db` |
 | `TZ` | ❌ | 时区设置，默认 `Asia/Shanghai`。Docker 部署建议检查此项。 |
 | `BARK_KEY` | ❌ | Bark 推送 Key (Actions 模式用) |
 | `FEISHU_WEBHOOK` | ❌ | 飞书 Webhook (Actions 模式用) |

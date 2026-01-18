@@ -11,3 +11,6 @@ services:
     environment:
       # You can override env vars here if you don't use .env file
       - TZ=Asia/Shanghai
+      - DB_PATH=/app/data/users.db
+    volumes:
+      - ./data:/app/data
