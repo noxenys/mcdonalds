@@ -5,6 +5,7 @@ import time
 import re
 import schedule
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from notify import push_all
@@ -97,6 +98,22 @@ def cleanup_for_telegram(text):
         
     return "\n".join(cleaned).strip()
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+async def _request_mcp_with_retry(headers, tool_name, arguments):
+    start_ts = time.time()
+    async with streamablehttp_client(MCP_SERVER_URL, headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            if arguments is None:
+                result = await session.call_tool(tool_name)
+            else:
+                result = await session.call_tool(tool_name, arguments=arguments)
+
+    cost = time.time() - start_ts
+    print(f"[MCP] tool={tool_name} finished in {cost:.1f}s")
+    return result
+
 async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, return_raw_content=False):
     if not token or token == "your_token_here":
         return "Error: Invalid Token."
@@ -109,23 +126,7 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
     print(f"[MCP] Connecting to {MCP_SERVER_URL} tool={tool_name}...")
 
     try:
-        async def _request_mcp():
-            start_ts = time.time()
-            async with streamablehttp_client(MCP_SERVER_URL, headers=headers) as (read, write, _):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-
-                    if arguments is None:
-                        result = await session.call_tool(tool_name)
-                    else:
-                        result = await session.call_tool(tool_name, arguments=arguments)
-
-            cost = time.time() - start_ts
-            print(f"[MCP] tool={tool_name} finished in {cost:.1f}s")
-            return result
-
-        # Set 60s timeout for the MCP interaction
-        result = await asyncio.wait_for(_request_mcp(), timeout=60)
+        result = await asyncio.wait_for(_request_mcp_with_retry(headers, tool_name, arguments), timeout=60)
 
         if return_raw_content:
             return result.content

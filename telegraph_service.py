@@ -1,6 +1,7 @@
 import httpx
 import json
 import os
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 class TelegraphService:
     BASE_URL = "https://api.telegra.ph"
@@ -39,27 +40,23 @@ class TelegraphService:
         except Exception as e:
             print(f"Error saving telegraph token: {e}")
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     async def create_account(self):
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.BASE_URL}/createAccount",
-                    params={
-                        "short_name": self.short_name,
-                        "author_name": self.author_name
-                    }
-                )
-                data = response.json()
-                if data.get("ok"):
-                    self._save_token(data["result"]["access_token"])
-                    return self.access_token
-                else:
-                    print(f"Failed to create Telegraph account: {data}")
-                    return None
-            except Exception as e:
-                print(f"Error creating Telegraph account: {e}")
-                return None
+            response = await client.get(
+                f"{self.BASE_URL}/createAccount",
+                params={
+                    "short_name": self.short_name,
+                    "author_name": self.author_name
+                }
+            )
+            data = response.json()
+            if data.get("ok"):
+                self._save_token(data["result"]["access_token"])
+                return self.access_token
+            raise Exception(f"Failed to create Telegraph account: {data}")
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     async def create_page(self, title, content_nodes):
         """
         content_nodes: List of Node objects.
@@ -71,29 +68,20 @@ class TelegraphService:
                 return None
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                # content needs to be serialized to JSON string
-                content_json = json.dumps(content_nodes)
-                
-                response = await client.post(
-                    f"{self.BASE_URL}/createPage",
-                    data={
-                        "access_token": self.access_token,
-                        "title": title,
-                        "content": content_json,
-                        "return_content": False
-                    }
-                )
-                data = response.json()
-                if data.get("ok"):
-                    return data["result"]["url"]
-                else:
-                    print(f"Failed to create Telegraph page: {data}")
-                    # If token invalid, maybe retry? But simple logic for now.
-                    return None
-            except Exception as e:
-                print(f"Error creating Telegraph page: {e}")
-                return None
+            content_json = json.dumps(content_nodes)
+            response = await client.post(
+                f"{self.BASE_URL}/createPage",
+                data={
+                    "access_token": self.access_token,
+                    "title": title,
+                    "content": content_json,
+                    "return_content": False
+                }
+            )
+            data = response.json()
+            if data.get("ok"):
+                return data["result"]["url"]
+            raise Exception(f"Failed to create Telegraph page: {data}")
 
     @staticmethod
     def format_calendar_to_nodes(calendar_data):

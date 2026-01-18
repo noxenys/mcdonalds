@@ -115,8 +115,8 @@ docker-compose up -d
    - `/claim`：立即领券
    - `/coupons`：查看当前可领优惠券
    - `/mycoupons`：查看你已拥有的优惠券
-   - `/calendar`：查看活动日历（可选参数 YYYY-MM-DD，带富文本预览）
-   - `/today`：基于活动日历与当前可领券，生成「今日用券建议」
+   - `/calendar`：查看活动日历（可选参数 YYYY-MM-DD，自动生成 Telegraph 图文页并发送链接）
+   - `/today`：基于活动日历与当前可领券，生成「今日用券建议」（优先生成 Telegraph 图文页，失败时发送纯文本）
    - `/status`：查看当前绑定状态、自动领券与汇报开关
    - `/stats`：查看自己的领券统计
    - `/autoclaim on` / `/autoclaim off`：开启或关闭每日自动领券
@@ -193,7 +193,7 @@ docker-compose up -d
 
 ### ⚠️ 注意事项
 
-1. **Token 过期**：麦当劳 Token 可能会过期。如果过期，Bot 会在每天的推送中提示你 `Token invalid`，此时请重新发送新 Token 给 Bot 即可。
+1. **Token 过期**：麦当劳 Token 可能会过期。如果过期，Bot 会在每天的推送中提示你 `Token invalid`，并自动暂停该账号的每日自动领券以减少无效请求。此时请重新发送新 Token 给 Bot，或在更新 Token 后使用 `/autoclaim on` 重新开启自动领券。
 2. **时区问题**：程序默认设定每天 10:30 运行。Docker 镜像已内置 `Asia/Shanghai` 时区，确保你领券是在白天而不是半夜。
 3. **隐私安全**：Bot 的数据库存储了用户的 Token。请确保你的数据库文件（`users.db`）安全，不要分享给他人。
 
