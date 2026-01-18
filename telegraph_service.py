@@ -124,10 +124,13 @@ class TelegraphService:
                 date_str = f"时间: {start} - {end}"
                 nodes.append({"tag": "p", "children": [{"tag": "b", "children": [date_str]}]})
 
-            # Content
             content = item.get("content") or item.get("desc")
             if content:
-                nodes.append({"tag": "p", "children": [content]})
+                for line in str(content).splitlines():
+                    l = line.strip()
+                    if not l:
+                        continue
+                    nodes.append({"tag": "p", "children": [l]})
             
             nodes.append({"tag": "hr"})
 
