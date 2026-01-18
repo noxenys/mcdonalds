@@ -3,6 +3,8 @@ import httpx
 import logging
 import asyncio
 
+logger = logging.getLogger(__name__)
+
 async def send_telegram(token, chat_id, message):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {

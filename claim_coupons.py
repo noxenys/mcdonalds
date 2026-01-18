@@ -2,29 +2,58 @@ import asyncio
 import os
 import sys
 import time
+import re
 import schedule
 from dotenv import load_dotenv
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.sse import sse_client
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 from notify import push_all
 
-# Load environment variables
 load_dotenv()
 
 MCP_SERVER_URL = "https://mcp.mcd.cn/mcp-servers/mcd-mcp"
 
-async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False):
+def cleanup_for_telegram(text):
+    lines = []
+    for line in text.splitlines():
+        if "<img" in line:
+            src_match = re.search(r'src="([^"]+)"', line)
+            alt_match = re.search(r'alt="([^"]*)"', line)
+            url = src_match.group(1) if src_match else ""
+            alt_text = alt_match.group(1) if alt_match else ""
+            if url:
+                if alt_text:
+                    line = f"- 图片：{alt_text} {url}"
+                else:
+                    line = f"- 图片：{url}"
+            else:
+                line = line.split("<img")[0].rstrip()
+        lines.append(line)
+    cleaned = []
+    prev_blank = False
+    for line in lines:
+        if line.strip() == "":
+            if prev_blank:
+                continue
+            prev_blank = True
+        else:
+            prev_blank = False
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, return_raw_content=False):
     if not token or token == "your_token_here":
         return "Error: Invalid Token."
 
     headers = {
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {token}",
+        "MCP-Protocol-Version": "2025-06-18",
     }
 
     print(f"Connecting to McDonald's MCP Server at {MCP_SERVER_URL}...")
 
     try:
-        async with sse_client(MCP_SERVER_URL, headers=headers) as (read, write):
+        async with streamablehttp_client(MCP_SERVER_URL, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
 
@@ -32,6 +61,9 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False):
                     result = await session.call_tool(tool_name)
                 else:
                     result = await session.call_tool(tool_name, arguments=arguments)
+
+                if return_raw_content:
+                    return result.content
 
                 print("\nExecution Result:")
                 result_message = ""
@@ -42,6 +74,9 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False):
                     else:
                         print(f"[{content.type}] {content}")
                         result_message += f"[{content.type}] {content}\n"
+
+                if result_message:
+                    result_message = cleanup_for_telegram(result_message)
 
                 if result_message and enable_push:
                     print("\nSending push notifications...")
@@ -67,10 +102,33 @@ async def list_available_coupons(token):
 async def list_my_coupons(token):
     return await call_mcp_tool(token, "my-coupons", enable_push=False)
 
-async def list_campaign_calendar(token, date=None):
+async def list_campaign_calendar(token, date=None, return_raw=False):
     arguments = None
     if date:
         arguments = {"date": date}
+    
+    if return_raw:
+        content_list = await call_mcp_tool(token, "campaign-calender", arguments=arguments, enable_push=False, return_raw_content=True)
+        if isinstance(content_list, str): # Error message
+            return content_list
+            
+        # Try to parse JSON from the first text content
+        import json
+        for content in content_list:
+            if content.type == 'text':
+                try:
+                    data = json.loads(content.text)
+                    return data
+                except json.JSONDecodeError:
+                    pass
+        
+        # Fallback: return text if parsing fails
+        text_result = ""
+        for content in content_list:
+            if content.type == 'text':
+                text_result += content.text
+        return text_result
+
     return await call_mcp_tool(token, "campaign-calender", arguments=arguments, enable_push=False)
 
 from quotes import MCD_QUOTES

@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation
+from telegraph_service import TelegraphService
+
+# Initialize Telegraph Service
+telegraph_service = TelegraphService()
 
 # SQLAlchemy imports
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, func, text, BigInteger
@@ -52,6 +56,7 @@ class User(Base):
     mcp_token = Column(String)
     created_at = Column(DateTime, server_default=func.now())
     auto_claim_enabled = Column(Integer, default=1)
+    claim_report_enabled = Column(Integer, default=1)
     last_claim_at = Column(DateTime)
     last_claim_success = Column(Integer)
     total_success = Column(Integer, default=0)
@@ -84,6 +89,7 @@ def init_db():
             with engine.connect() as conn:
                 alter_statements = [
                     "ALTER TABLE users ADD COLUMN auto_claim_enabled INTEGER DEFAULT 1",
+                    "ALTER TABLE users ADD COLUMN claim_report_enabled INTEGER DEFAULT 1",
                     "ALTER TABLE users ADD COLUMN last_claim_at TIMESTAMP",
                     "ALTER TABLE users ADD COLUMN last_claim_success INTEGER",
                     "ALTER TABLE users ADD COLUMN total_success INTEGER DEFAULT 0",
@@ -205,7 +211,7 @@ def get_all_users():
     try:
         # auto_claim_enabled IS NULL OR auto_claim_enabled=1
         users = session.query(User).filter((User.auto_claim_enabled == None) | (User.auto_claim_enabled == 1)).all()
-        return [(u.user_id, u.mcp_token) for u in users]
+        return [(u.user_id, u.mcp_token, u.claim_report_enabled) for u in users]
     finally:
         session.close()
 
@@ -221,12 +227,24 @@ def set_auto_claim_enabled(user_id, enabled):
     finally:
         session.close()
 
+def set_claim_report_enabled(user_id, enabled):
+    session = get_db()
+    try:
+        val = 1 if enabled else 0
+        session.query(User).filter(User.user_id == user_id).update({"claim_report_enabled": val})
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error in set_claim_report_enabled: {e}")
+    finally:
+        session.close()
+
 def get_user_stats_and_status(user_id):
     session = get_db()
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
         if user:
-            return (user.username, user.auto_claim_enabled, user.last_claim_at, 
+            return (user.username, user.auto_claim_enabled, user.claim_report_enabled, user.last_claim_at, 
                     user.last_claim_success, user.total_success, user.total_failed, user.created_at)
         return None
     finally:
@@ -294,6 +312,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/help - 查看帮助",
         reply_markup=reply_markup
     )
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Alias for /start to show the menu."""
+    await start(update, context)
+
+async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    args = context.args
+    
+    if not args:
+        await update.message.reply_text("用法：/token <你的MCP Token>\n\n你可以直接把 Token 发给我，或者使用此命令设置。")
+        return
+
+    token = args[0]
+    if len(token) < 20:
+        await update.message.reply_text("❌ Token 看起来太短了，请检查是否正确。")
+        return
+
+    await update.message.reply_text("🔍 正在验证你的 Token，请稍等...")
+    
+    # Reuse verification logic
+    result = await claim_for_token(token, enable_push=False)
+    
+    if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
+         await update.message.reply_text(f"❌ Token 无效或连接失败。\n{result}")
+    else:
+        save_user_token(user_id, username, token)
+        await update.message.reply_text(
+            f"✅ Token 验证成功并已保存！\n\n"
+            f"我已经帮你执行了一次领券：\n{result}\n\n"
+            f"之后我会在每天 10:30 自动为你领券。"
+        )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -386,8 +437,26 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     args = context.args
     date = args[0] if args else None
     await update.message.reply_text("🗓️ 正在为你查询活动日历，请稍等...")
-    result = await list_campaign_calendar(token, date)
-    await update.message.reply_text(result or "暂未查询到活动信息。")
+    
+    # Try to get raw data first
+    data = await list_campaign_calendar(token, date, return_raw=True)
+    
+    if isinstance(data, list):
+        # Structured data! Create Telegraph page
+        nodes = telegraph_service.format_calendar_to_nodes(data)
+        page_title = f"麦当劳活动日历 {date if date else ''}"
+        page_url = await telegraph_service.create_page(page_title.strip(), nodes)
+        
+        if page_url:
+            # Send link with preview
+            await update.message.reply_text(f"活动日历已生成: [点击查看]({page_url})", parse_mode='Markdown')
+        else:
+             # Fallback to text if creation failed
+             text_result = await list_campaign_calendar(token, date, return_raw=False)
+             await update.message.reply_text(text_result or "暂未查询到活动信息。")
+    else:
+        # String result (error or text)
+        await update.message.reply_text(data or "暂未查询到活动信息。")
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -437,11 +506,15 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
         return
 
-    username, auto_claim_enabled, last_claim_at, last_claim_success, total_success, total_failed, created_at = row
+    username, auto_claim_enabled, claim_report_enabled, last_claim_at, last_claim_success, total_success, total_failed, created_at = row
 
     auto_enabled = True
     if auto_claim_enabled is not None and auto_claim_enabled == 0:
         auto_enabled = False
+
+    report_enabled = True
+    if claim_report_enabled is not None and claim_report_enabled == 0:
+        report_enabled = False
 
     if last_claim_success is None:
         last_result_text = "暂无记录"
@@ -454,7 +527,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "📊 当前账号状态：\n\n"
         f"用户：@{username or '未知'}（ID: {user_id}）\n"
         "绑定状态：已绑定\n"
-        f"自动领券：{'已开启' if auto_enabled else '已关闭'}\n"
+        f"自动领券：{'✅ 已开启' if auto_enabled else '🚫 已关闭'}\n"
+        f"领券汇报：{'✅ 已开启' if report_enabled else '🚫 已关闭'}\n"
         f"上次领券时间：{last_claim_at or '暂无记录'}\n"
         f"上次结果：{last_result_text}\n"
     )
@@ -470,7 +544,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⚠️ 暂无数据，你还没有绑定 MCP Token 或从未领过券。")
         return
 
-    _, _, _, _, total_success, total_failed, _ = row
+    _, _, _, _, _, total_success, total_failed, _ = row
 
     success_count = total_success or 0
     failed_count = total_failed or 0
@@ -516,7 +590,7 @@ async def autoclaim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not args:
         auto_claim_enabled = None
         if row:
-            _, auto_claim_enabled, _, _, _, _, _ = row
+            _, auto_claim_enabled, _, _, _, _, _, _ = row
         enabled = True
         if auto_claim_enabled is not None and auto_claim_enabled == 0:
             enabled = False
@@ -539,6 +613,56 @@ async def autoclaim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("✅ 已关闭每日自动领券，你仍然可以使用 /claim 手动领券。")
     else:
         await update.message.reply_text("❓ 无法识别参数，请使用 /autoclaim on 或 /autoclaim off。")
+
+async def autoclaimreport_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    token = get_user_token(user_id)
+
+    if not token:
+        await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
+        return
+
+    args = context.args
+    row = get_user_stats_and_status(user_id)
+    
+    # row = (username, auto_claim_enabled, claim_report_enabled, ...)
+    # Wait, I updated get_user_stats_and_status to return 8 items.
+    # I need to verify unpacking.
+    
+    if not args:
+        report_enabled = None
+        if row:
+            # Need to carefully unpack
+             _, _, report_enabled, _, _, _, _, _ = row
+        
+        enabled = True
+        if report_enabled is not None and report_enabled == 0:
+            enabled = False
+        
+        msg = (
+            f"当前自动领券汇报状态：{'✅ 开启' if enabled else '🚫 关闭'}\n"
+            "开启后，每天自动领券无论成功或失败都会发送消息通知。\n"
+            "使用方式：/autoclaimreport on 开启，/autoclaimreport off 关闭。"
+        )
+        await update.message.reply_text(msg)
+        return
+
+    mode = args[0].lower()
+    enable_values = ["on", "开启", "开", "true", "1"]
+    disable_values = ["off", "关闭", "关", "false", "0"]
+
+    if mode in enable_values:
+        set_claim_report_enabled(user_id, True)
+        await update.message.reply_text("✅ 已开启自动领券汇报。")
+    elif mode in disable_values:
+        set_claim_report_enabled(user_id, False)
+        await update.message.reply_text("✅ 已关闭自动领券汇报。")
+    else:
+        await update.message.reply_text("❓ 无法识别参数，请使用 /autoclaimreport on 或 /autoclaimreport off。")
+
+async def cleartoken_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Alias for unbind but emphasizes clearing all data."""
+    await unbind_command(update, context)
 
 async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -654,7 +778,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
         await update.message.reply_text(f"📣 正在向 {len(users)} 位用户发送广播...")
         
-        for uid, _ in users:
+        for uid, _, _ in users:
             try:
                 await context.bot.send_message(chat_id=uid, text=f"📢 管理员通知：\n\n{message}")
                 count += 1
@@ -681,7 +805,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 from quotes import MCD_QUOTES
 import random
 
-async def process_user_claim(application: Application, user_id, token, semaphore):
+async def process_user_claim(application: Application, user_id, token, report_enabled, semaphore):
     async with semaphore:
         try:
             logger.info(f"Claiming for user {user_id}")
@@ -692,16 +816,18 @@ async def process_user_claim(application: Application, user_id, token, semaphore
                 success = False
             update_claim_stats(user_id, success)
 
-            message = f"🔔 每日自动领券结果：\n\n{result}"
+            # Only send message if report_enabled is True (default 1) or None (treated as True)
+            if report_enabled is None or report_enabled == 1:
+                message = f"🔔 每日自动领券结果：\n\n{result}"
 
-            if "error" in lower or "401" in result or "unauthorized" in lower:
-                message += "\n\n⚠️ 注意：你的 Token 可能已失效或无效，请重新发送新的 Token 进行绑定。"
-            elif success:
-                # Add random quote for successful claims
-                quote = random.choice(MCD_QUOTES)
-                message += f"\n\n🍟 {quote}"
+                if "error" in lower or "401" in result or "unauthorized" in lower:
+                    message += "\n\n⚠️ 注意：你的 Token 可能已失效或无效，请重新发送新的 Token 进行绑定。"
+                elif success:
+                    # Add random quote for successful claims
+                    quote = random.choice(MCD_QUOTES)
+                    message += f"\n\n🍟 {quote}"
 
-            await application.bot.send_message(chat_id=user_id, text=message)
+                await application.bot.send_message(chat_id=user_id, text=message)
         except Exception as e:
             logger.error(f"Failed to auto-claim for user {user_id}: {e}")
 
@@ -713,11 +839,34 @@ async def scheduled_job(application: Application):
     semaphore = asyncio.Semaphore(5)
     tasks = []
     
-    for user_id, token in users:
-        tasks.append(process_user_claim(application, user_id, token, semaphore))
+    for user_id, token, report_enabled in users:
+        tasks.append(process_user_claim(application, user_id, token, report_enabled, semaphore))
     
     await asyncio.gather(*tasks)
     logger.info("Scheduled run complete.")
+
+async def post_init(application: Application) -> None:
+    """
+    Set up bot commands menu on startup.
+    """
+    commands = [
+        ("menu", "打开按钮菜单"),
+        ("claim", "立即领券"),
+        ("token", "设置 MCP Token"),
+        ("account", "多账号管理"),
+        ("calendar", "活动日历查询"),
+        ("today", "今日智能推荐"),
+        ("coupons", "查看可领优惠券"),
+        ("mycoupons", "我的券包"),
+        ("autoclaim", "自动领券设置"),
+        ("autoclaimreport", "自动领券汇报设置"),
+        ("stats", "领券统计"),
+        ("status", "查看状态"),
+        ("cleartoken", "清除 Token (解绑)"),
+        ("help", "查看帮助")
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands menu set.")
 
 def run_scheduler(application, loop):
     """
@@ -765,9 +914,11 @@ def main():
         except ValueError:
             logger.warning("TG_CHAT_ID is not a valid integer, skipping owner auto-registration.")
 
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(post_init).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(CommandHandler("token", token_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("claim", claim_command))
     application.add_handler(CommandHandler("calendar", calendar_command))
@@ -779,6 +930,8 @@ def main():
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("autoclaim", autoclaim_command))
+    application.add_handler(CommandHandler("autoclaimreport", autoclaimreport_command))
+    application.add_handler(CommandHandler("cleartoken", cleartoken_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

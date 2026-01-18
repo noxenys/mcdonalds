@@ -21,6 +21,11 @@
 2. 登录并点击“申请 Token”。
 3. 复制获得的 Token（请妥善保管）。
 
+麦当劳官方 MCP Server 信息：
+- 接入地址：`https://mcp.mcd.cn/mcp-servers/mcd-mcp`
+- 传输协议：Streamable HTTP
+- 认证方式：在请求头中携带 `Authorization: Bearer YOUR_MCP_TOKEN`
+
 ---
 
 ## 🏠 场景一：个人独享 (GitHub Actions)
@@ -78,21 +83,23 @@ docker-compose up -d
 
 ### 4. 使用方法
 1. 在 Telegram 上找到你的 Bot。
-2. 发送 `/start`。
-3. 直接发送 **MCP Token** 给 Bot。
+2. 发送 `/start` 或 `/menu` 打开按钮菜单。
+3. 直接发送 **MCP Token** 给 Bot，或使用 `/token <你的MCP Token>` 命令。
 4. Bot 会验证 Token，如果正确，就会自动保存。
 5. 之后你可以使用以下命令：
    - `/claim`：立即领券
    - `/coupons`：查看当前可领优惠券
    - `/mycoupons`：查看你已拥有的优惠券
-   - `/calendar`：查看活动日历（可选参数 YYYY-MM-DD）
+   - `/calendar`：查看活动日历（可选参数 YYYY-MM-DD，带富文本预览）
    - `/today`：基于活动日历与当前可领券，生成「今日用券建议」
-   - `/status`：查看当前绑定状态和自动领券开关
+   - `/status`：查看当前绑定状态、自动领券与汇报开关
    - `/stats`：查看自己的领券统计
    - `/autoclaim on` / `/autoclaim off`：开启或关闭每日自动领券
+   - `/autoclaimreport on` / `/autoclaimreport off`：开启或关闭每日自动领券结果私聊汇报
    - `/account add/use/list/del`：多账号管理（支持为同一个人绑定多个麦当劳账号）
-   - `/admin`：管理员总览（仅 TG_CHAT_ID 对应账号可用，支持 `/admin sweep` 立即执行一次全量自动领券）
-6. **以后每天 10:30，Bot 会自动帮所有开启自动领券的用户领券，并私聊通知结果。**
+   - `/cleartoken`：清除当前账号的所有 Token 记录（等同 `/unbind`）
+   - `/admin`：管理员总览（仅 TG_CHAT_ID 对应账号可用，支持 `/admin sweep` 立即执行一次全量自动领券，`/admin broadcast <消息>` 群发通知）
+6. **以后每天 10:30，Bot 会自动帮所有开启自动领券的用户领券。默认会私聊通知结果，你也可以通过 `/autoclaimreport off` 关闭自动汇报，仅在后台默默领券。**
 
 ### 👨‍👩‍👧‍👦 如何分享给朋友
 你的 Bot 天生支持**多用户**！
