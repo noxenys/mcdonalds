@@ -427,7 +427,7 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if "error" in lower or "401" in result or "unauthorized" in lower:
         success = False
     update_claim_stats(user_id, success)
-    await update.message.reply_text(f"完成！\n{result}")
+    await update.message.reply_text(f"完成！\n{result}", parse_mode='Markdown')
 
 async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -467,7 +467,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     await update.message.reply_text("🤖 正在结合活动日历和可领优惠券为你生成今天的用券建议，请稍等...")
     result = await get_today_recommendation(token)
-    await update.message.reply_text(result)
+    await update.message.reply_text(result, parse_mode='Markdown')
 
 async def coupons_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -670,21 +670,43 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     token = get_user_token(user_id)
     args = context.args
     if not args:
-        await update.message.reply_text("用法：/account add <名称> <Token>，/account use <名称>，/account list，/account del <名称>")
+        msg = (
+            "👤 *多账号管理*\n\n"
+            "你可以同时绑定多个麦当劳账号，并随时切换。\n\n"
+            "📋 *命令列表*：\n"
+            "`/account add <名称> <Token>` - 添加新账号\n"
+            "`/account use <名称>` - 切换到指定账号\n"
+            "`/account list` - 查看已添加的账号\n"
+            "`/account del <名称>` - 删除指定账号\n"
+        )
+        await update.message.reply_text(msg, parse_mode='Markdown')
         return
     sub = args[0].lower()
     if sub == "add":
         if len(args) < 3:
-            await update.message.reply_text("用法：/account add <名称> <Token>")
+            await update.message.reply_text("❌ 格式错误\n请使用：`/account add <名称> <Token>`", parse_mode='Markdown')
             return
         name = args[1]
         new_token = " ".join(args[2:])
+        if len(new_token) < 20:
+             await update.message.reply_text("❌ Token 无效或太短，请检查。", parse_mode='Markdown')
+             return
+        
+        # Verify token validity before adding
+        await update.message.reply_text(f"🔍 正在验证账号 `{name}` 的 Token...", parse_mode='Markdown')
+        result = await claim_for_token(new_token, enable_push=False)
+        
+        if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
+             await update.message.reply_text(f"❌ Token 验证失败，账号未添加。\n错误信息：{result}")
+             return
+
         upsert_account(user_id, name, new_token, True)
         save_user_token(user_id, update.effective_user.username, new_token)
-        await update.message.reply_text(f"✅ 已添加/更新账号 {name} 并设为当前账号。")
+        await update.message.reply_text(f"✅ 账号 `{name}` 添加成功并设为当前账号！", parse_mode='Markdown')
+        
     elif sub == "use":
         if len(args) < 2:
-            await update.message.reply_text("用法：/account use <名称>")
+            await update.message.reply_text("❌ 格式错误\n请使用：`/account use <名称>`", parse_mode='Markdown')
             return
         name = args[1]
         accounts = get_accounts(user_id)
@@ -694,24 +716,26 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 target = acc
                 break
         if not target:
-            await update.message.reply_text("未找到该账号名称。")
+            await update.message.reply_text(f"❌ 未找到名为 `{name}` 的账号。", parse_mode='Markdown')
             return
         set_active_account(user_id, name)
         save_user_token(user_id, update.effective_user.username, target[1])
-        await update.message.reply_text(f"✅ 已切换到账号 {name}。")
+        await update.message.reply_text(f"✅ 已切换到账号 `{name}`。", parse_mode='Markdown')
+        
     elif sub == "list":
         accounts = get_accounts(user_id)
         if not accounts:
-            await update.message.reply_text("你还没有添加任何账号。")
+            await update.message.reply_text("⚠️ 你还没有添加任何账号。")
             return
         lines = []
         for name, acc_token, is_active in accounts:
-            mark = "✅" if is_active else "•"
-            lines.append(f"{mark} {name}")
-        await update.message.reply_text("你的账号列表：\n" + "\n".join(lines))
+            mark = "✅" if is_active else "⚪️"
+            lines.append(f"{mark} `{name}`")
+        await update.message.reply_text("📋 **你的账号列表**：\n\n" + "\n".join(lines), parse_mode='Markdown')
+        
     elif sub == "del":
         if len(args) < 2:
-            await update.message.reply_text("用法：/account del <名称>")
+            await update.message.reply_text("❌ 格式错误\n请使用：`/account del <名称>`", parse_mode='Markdown')
             return
         name = args[1]
         accounts = get_accounts(user_id)
@@ -724,24 +748,37 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     was_active = True
                 break
         if not exists:
-            await update.message.reply_text("未找到该账号名称。")
+            await update.message.reply_text(f"❌ 未找到名为 `{name}` 的账号。", parse_mode='Markdown')
             return
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("DELETE FROM accounts WHERE user_id=? AND name=?", (user_id, name))
-        conn.commit()
-        conn.close()
+        
+        # Use SQLAlchemy session for deletion to be safe
+        session = get_db()
+        try:
+            session.query(Account).filter(Account.user_id == user_id, Account.name == name).delete()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error deleting account: {e}")
+            await update.message.reply_text("❌ 删除失败，数据库错误。")
+            return
+        finally:
+            session.close()
+
         if was_active:
             remaining = get_accounts(user_id)
             if remaining:
                 first_name, first_token, _ = remaining[0]
                 set_active_account(user_id, first_name)
                 save_user_token(user_id, update.effective_user.username, first_token)
+                await update.message.reply_text(f"✅ 已删除账号 `{name}`。\n自动切换到 `{first_name}`。", parse_mode='Markdown')
             else:
                 delete_user_token(user_id)
-        await update.message.reply_text(f"✅ 已删除账号 {name}。")
+                await update.message.reply_text(f"✅ 已删除账号 `{name}`。\n你当前没有绑定任何账号。", parse_mode='Markdown')
+        else:
+            await update.message.reply_text(f"✅ 已删除账号 `{name}`。", parse_mode='Markdown')
+            
     else:
-        await update.message.reply_text("未知子命令，用法：/account add/use/list/del")
+        await update.message.reply_text("❓ 未知子命令，请直接输入 `/account` 查看帮助。")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -828,7 +865,7 @@ async def process_user_claim(application: Application, user_id, token, report_en
                     quote = random.choice(MCD_QUOTES)
                     message += f"\n\n🍟 {quote}"
 
-                await application.bot.send_message(chat_id=user_id, text=message)
+                await application.bot.send_message(chat_id=user_id, text=message, parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Failed to auto-claim for user {user_id}: {e}")
 

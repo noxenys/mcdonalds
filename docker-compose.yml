@@ -3,7 +3,7 @@ version: '3.8'
 services:
   mcdonalds-coupon-claimer:
     # build: .  <-- 如果你想自己编译，用这行
-    image: ghcr.io/noxenys/mcdonalds:1.2.1 # <-- 直接用现成的镜像
+    image: ghcr.io/noxenys/mcdonalds:latest # <-- 直接用现成的镜像
     container_name: mcd_coupon_claimer
     restart: unless-stopped
     env_file:

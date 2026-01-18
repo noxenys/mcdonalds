@@ -123,23 +123,23 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
             return result.content
 
         print("\nExecution Result:")
-                result_message = ""
-                for content in result.content:
-                    if content.type == "text":
-                        print(content.text)
-                        result_message += content.text + "\n"
-                    else:
-                        print(f"[{content.type}] {content}")
-                        result_message += f"[{content.type}] {content}\n"
+        result_message = ""
+        for content in result.content:
+            if content.type == "text":
+                print(content.text)
+                result_message += content.text + "\n"
+            else:
+                print(f"[{content.type}] {content}")
+                result_message += f"[{content.type}] {content}\n"
 
-                if result_message:
-                    result_message = cleanup_for_telegram(result_message)
+        if result_message:
+            result_message = cleanup_for_telegram(result_message)
 
-                if result_message and enable_push:
-                    print("\nSending push notifications...")
-                    await push_all(result_message)
+        if result_message and enable_push:
+            print("\nSending push notifications...")
+            await push_all(result_message)
 
-                return result_message
+        return result_message
                     
     except Exception as e:
         raw = str(e)
@@ -209,11 +209,11 @@ async def get_today_recommendation(token):
     if available_text:
         # 简单关键词匹配
         if "免费" in available_text or "0元" in available_text:
-            highlights.append("✨ **发现免费羊毛！** 赶紧看看列表！")
+            highlights.append("✨ *发现免费羊毛！* 赶紧看看列表！")
         if "买一送一" in available_text or "1+1" in available_text:
-            highlights.append("🔥 **有买一送一活动！** 适合找人拼单。")
+            highlights.append("🔥 *有买一送一活动！* 适合找人拼单。")
         if "半价" in available_text:
-            highlights.append("💰 **半价优惠！** 四舍五入不要钱。")
+            highlights.append("💰 *半价优惠！* 四舍五入不要钱。")
     
     if highlights:
         lines.append("\n".join(highlights))
@@ -222,15 +222,15 @@ async def get_today_recommendation(token):
     # 2. 时段推荐逻辑
     time_tip = ""
     if 5 <= current_hour < 10:
-        time_tip = "🍳 **早餐时段**：来个猪柳蛋堡唤醒灵魂吧！"
+        time_tip = "🍳 *早餐时段*：来个猪柳蛋堡唤醒灵魂吧！"
     elif 11 <= current_hour < 14:
-        time_tip = "🍔 **午餐时段**：1+1随心配，最强穷鬼套餐。"
+        time_tip = "🍔 *午餐时段*：1+1随心配，最强穷鬼套餐。"
     elif 14 <= current_hour < 17:
-        time_tip = "☕ **下午茶时段**：工作累了？点杯咖啡配个派。"
+        time_tip = "☕ *下午茶时段*：工作累了？点杯咖啡配个派。"
     elif 17 <= current_hour < 21:
-        time_tip = "🍗 **晚餐时段**：今晚吃顿好的，对自己好一点。"
+        time_tip = "🍗 *晚餐时段*：今晚吃顿好的，对自己好一点。"
     elif 21 <= current_hour or current_hour < 5:
-        time_tip = "🌙 **夜宵时段**：虽然会胖，但是炸鸡真香啊..."
+        time_tip = "🌙 *夜宵时段*：虽然会胖，但是炸鸡真香啊..."
         
     if time_tip:
         lines.append(time_tip)
