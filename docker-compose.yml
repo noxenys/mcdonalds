@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  mcdonalds-coupon-claimer:
+    build: .
+    container_name: mcd_coupon_claimer
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # You can override env vars here if you don't use .env file
+      - TZ=Asia/Shanghai
