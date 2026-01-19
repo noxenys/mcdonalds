@@ -581,19 +581,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if len(text) > 20 and not text.startswith('/'):
-        await update.message.reply_text("🔍 正在验证你的 Token，请稍等...")
+        progress_msg = await update.message.reply_text("🔍 正在验证你的 Token，请稍等...")
         
-        result = await claim_for_token(text, enable_push=False)
-        
-        if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
-             await update.message.reply_text(f"❌ Token 无效或连接失败。\n{result}")
-        else:
-            save_user_token(user_id, username, text)
-            await update.message.reply_text(
-                f"✅ Token 验证成功并已保存！\n\n"
-                f"我已经帮你执行了一次领券：\n{result}\n\n"
-                f"之后我会在每天 10:30 自动为你领券。"
-            )
+        try:
+            result = await claim_for_token(text, enable_push=False)
+            
+            if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
+                 await update.message.reply_text(f"❌ Token 无效或连接失败。\n{result}")
+            else:
+                save_user_token(user_id, username, text)
+                await update.message.reply_text(
+                    f"✅ Token 验证成功并已保存！\n\n"
+                    f"我已经帮你执行了一次领券：\n{result}\n\n"
+                    f"之后我会在每天 10:30 自动为你领券。"
+                )
+        finally:
+            if progress_msg:
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
     else:
         await update.message.reply_text("❓ 没看懂，你可以直接把 MCP Token 发给我完成绑定。")
 
@@ -605,14 +612,21 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
         return
 
-    await update.message.reply_text("🍟 正在为你领券...")
-    result = await claim_for_token(token, enable_push=False)
-    success = True
-    lower = result.lower()
-    if "error" in lower or "401" in result or "unauthorized" in lower:
-        success = False
-    update_claim_stats(user_id, success)
-    await update.message.reply_text(f"完成！\n{result}", parse_mode='Markdown')
+    progress_msg = await update.message.reply_text("🍟 正在为你领券...")
+    try:
+        result = await claim_for_token(token, enable_push=False)
+        success = True
+        lower = result.lower()
+        if "error" in lower or "401" in result or "unauthorized" in lower:
+            success = False
+        update_claim_stats(user_id, success)
+        await update.message.reply_text(f"完成！\n{result}", parse_mode='Markdown')
+    finally:
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -622,30 +636,18 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     args = context.args
     date = args[0] if args else None
-    await update.message.reply_text("🗓️ 正在为你查询活动日历，请稍等...")
+    progress_msg = await update.message.reply_text("🗓️ 正在为你查询活动日历，请稍等...")
 
-    raw_result = await list_campaign_calendar(token, date, return_raw=True)
+    try:
+        raw_result = await list_campaign_calendar(token, date, return_raw=True)
 
-    calendar_nodes = None
-    text_result = None
-    summary_hint = ""
+        calendar_nodes = None
+        text_result = None
+        summary_hint = ""
 
-    # 优先使用结构化 JSON 构建 Telegraph 图文卡片
-    if isinstance(raw_result, list):
-        items = [item for item in raw_result if isinstance(item, dict)]
-        if items:
-            calendar_nodes = telegraph_service.format_calendar_to_nodes(items)
-            titles = []
-            for item in items:
-                t = item.get("title") or item.get("name")
-                if t:
-                    titles.append(t)
-            if titles:
-                summary_hint = "活动列表：" + " ｜ ".join(titles[:6])
-    elif isinstance(raw_result, dict):
-        candidates = raw_result.get("items") or raw_result.get("campaigns") or raw_result.get("data") or raw_result.get("list")
-        if isinstance(candidates, list):
-            items = [item for item in candidates if isinstance(item, dict)]
+        # 优先使用结构化 JSON 构建 Telegraph 图文卡片
+        if isinstance(raw_result, list):
+            items = [item for item in raw_result if isinstance(item, dict)]
             if items:
                 calendar_nodes = telegraph_service.format_calendar_to_nodes(items)
                 titles = []
@@ -655,39 +657,59 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         titles.append(t)
                 if titles:
                     summary_hint = "活动列表：" + " ｜ ".join(titles[:6])
+        elif isinstance(raw_result, dict):
+            candidates = raw_result.get("items") or raw_result.get("campaigns") or raw_result.get("data") or raw_result.get("list")
+            if isinstance(candidates, list):
+                items = [item for item in candidates if isinstance(item, dict)]
+                if items:
+                    calendar_nodes = telegraph_service.format_calendar_to_nodes(items)
+                    titles = []
+                    for item in items:
+                        t = item.get("title") or item.get("name")
+                        if t:
+                            titles.append(t)
+                    if titles:
+                        summary_hint = "活动列表：" + " ｜ ".join(titles[:6])
+            else:
+                text_result = str(raw_result)
         else:
-            text_result = str(raw_result)
-    else:
-        text_result = raw_result
+            text_result = raw_result
 
-    if isinstance(text_result, str):
-        text_result = strip_mcp_header(text_result)
+        if isinstance(text_result, str):
+            text_result = strip_mcp_header(text_result)
 
-    if isinstance(text_result, str) and is_mcp_error_message(text_result):
-        await update.message.reply_text("今天麦当劳 MCP 服务似乎出问题了，我暂时查不到活动日历，可以稍后再试一次 /calendar。")
-        return
+        if isinstance(text_result, str) and is_mcp_error_message(text_result):
+            await update.message.reply_text("今天麦当劳 MCP 服务似乎出问题了，我暂时查不到活动日历，可以稍后再试一次 /calendar。")
+            return
 
-    if not calendar_nodes and not text_result:
-        await update.message.reply_text("暂未查询到活动信息。")
-    else:
-        if not text_result:
-            text_result = summary_hint or "麦当劳活动日历"
-
-        sanitized = sanitize_text(text_result)
-        page_url = None
-        try:
-            page_url = await telegraph_service.create_page(
-                title="麦当劳活动日历",
-                content_nodes=calendar_nodes or build_telegraph_nodes_from_text(text_result, title="麦当劳活动日历")
-            )
-        except Exception as e:
-            logger.error(f"Telegraph page error: {e}")
-        if page_url:
-            summary = sanitized[:300] + ("..." if len(sanitized) > 300 else "")
-            msg = f"📄 活动日历（图文版）：{page_url}\n\n{summary}"
-            await safe_reply_text(update, msg)
+        if not calendar_nodes and not text_result:
+            await update.message.reply_text("暂未查询到活动信息。")
         else:
-            await send_chunked(update, sanitized, parse_mode=None)
+            if not text_result:
+                text_result = summary_hint or "麦当劳活动日历"
+
+            sanitized = sanitize_text(text_result)
+            page_url = None
+            try:
+                page_url = await telegraph_service.create_page(
+                    title="麦当劳活动日历",
+                    content_nodes=calendar_nodes or build_telegraph_nodes_from_text(text_result, title="麦当劳活动日历")
+                )
+            except Exception as e:
+                logger.error(f"Telegraph page error: {e}")
+            if page_url:
+                summary = sanitized[:300] + ("..." if len(sanitized) > 300 else "")
+                msg = f"📄 活动日历（图文版）：{page_url}\n\n{summary}"
+                await safe_reply_text(update, msg)
+            else:
+                await send_chunked(update, sanitized, parse_mode=None)
+
+    finally:
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 def sanitize_text(text: str) -> str:
     if not text:
@@ -790,9 +812,16 @@ async def coupons_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
         return
 
-    await update.message.reply_text("📋 正在为你查询当前可领优惠券，请稍等...")
-    result = await list_available_coupons(token)
-    await update.message.reply_text(result or "暂无可领优惠券。")
+    progress_msg = await update.message.reply_text("📋 正在为你查询当前可领优惠券，请稍等...")
+    try:
+        result = await list_available_coupons(token)
+        await update.message.reply_text(result or "暂无可领优惠券。")
+    finally:
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 async def my_coupons_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -802,9 +831,16 @@ async def my_coupons_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
         return
 
-    await update.message.reply_text("🎟️ 正在为你查询你已拥有的优惠券，请稍等...")
-    result = await list_my_coupons(token)
-    await update.message.reply_text(result or "暂未查询到你的优惠券。")
+    progress_msg = await update.message.reply_text("🎟️ 正在为你查询你已拥有的优惠券，请稍等...")
+    try:
+        result = await list_my_coupons(token)
+        await update.message.reply_text(result or "暂未查询到你的优惠券。")
+    finally:
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
