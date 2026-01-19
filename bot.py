@@ -660,6 +660,9 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         text_result = raw_result
 
+    if isinstance(text_result, str):
+        text_result = strip_mcp_header(text_result)
+
     if isinstance(text_result, str) and is_mcp_error_message(text_result):
         await update.message.reply_text("今天麦当劳 MCP 服务似乎出问题了，我暂时查不到活动日历，可以稍后再试一次 /calendar。")
         return
@@ -707,6 +710,25 @@ def sanitize_text(text: str) -> str:
     # 但仍可简单规范标题符号
     cleaned = re.sub(r"^#+\s*", "", cleaned, flags=re.MULTILINE)
     return cleaned
+
+def strip_mcp_header(text: str) -> str:
+    if not text:
+        return ""
+    raw_lines = text.splitlines()
+    cleaned_raw = []
+    skipping_header = True
+    for line in raw_lines:
+        stripped = line.strip()
+        if skipping_header:
+            if not stripped:
+                continue
+            if "Client 支持 Markdown 渲染" in stripped:
+                continue
+            if stripped.startswith("### 当前时间") or stripped.startswith("当前时间：") or stripped.startswith("当前时间:"):
+                continue
+            skipping_header = False
+        cleaned_raw.append(line)
+    return "\n".join(cleaned_raw)
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
