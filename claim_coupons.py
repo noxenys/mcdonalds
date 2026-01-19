@@ -182,6 +182,24 @@ def is_mcp_error_message(text: str) -> bool:
         return True
     return False
 
+def strip_calendar_today_header(text: str) -> str:
+    if not text:
+        return ""
+    raw_lines = text.splitlines()
+    cleaned = []
+    skipping_first = True
+    for line in raw_lines:
+        stripped = line.strip()
+        if skipping_first:
+            if not stripped:
+                continue
+            if "今天是" in stripped or "今日" in stripped:
+                skipping_first = False
+                continue
+            skipping_first = False
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
 async def claim_for_token(token, enable_push=True):
     return await call_mcp_tool(token, "auto-bind-coupons", enable_push=enable_push)
 
@@ -281,7 +299,8 @@ async def get_today_recommendation(token):
             lines.append("查询活动信息时出现问题：")
             lines.append(calendar_text.strip())
         else:
-            lines.append(calendar_text.strip())
+            cal_cleaned = strip_calendar_today_header(calendar_text)
+            lines.append(cal_cleaned.strip())
     lines.append("")
     lines.append("【你当前可领的优惠券】")
     available_error = False

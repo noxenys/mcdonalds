@@ -736,10 +736,16 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not token:
         await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
         return
-    await update.message.reply_text("🤖 正在结合活动日历和可领优惠券为你生成今天的用券建议，请稍等...")
+    progress_msg = await update.message.reply_text("🤖 正在结合活动日历和可领优惠券为你生成今天的用券建议，请稍等...")
     try:
         result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
         if is_mcp_error_message(result):
+            if progress_msg:
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
+                progress_msg = None
             await update.message.reply_text("今天麦当劳 MCP 服务似乎挂了，我暂时没法生成今日推荐，可以稍后再试一次 /today。")
             return
         raw_calendar = await list_campaign_calendar(token, return_raw=True)
@@ -759,10 +765,22 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         else:
             await send_chunked(update, sanitized, parse_mode=None)
     except asyncio.TimeoutError:
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
+            progress_msg = None
         await update.message.reply_text(
             "⏰ 今日推荐生成超时，可能是麦当劳 MCP 服务响应过慢。\n"
             "你可以先使用 /coupons 和 /calendar 单独查看，稍后再试 /today。"
         )
+    finally:
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
 
 async def coupons_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
