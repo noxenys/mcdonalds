@@ -176,6 +176,9 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
 def is_mcp_error_message(text: str) -> bool:
     if not text:
         return False
+    # 如果文本很长，通常是正常内容而不是简单的错误提示
+    if len(text) > 200:
+        return False
     if "麦当劳 MCP 服务当前出现异常" in text:
         return True
     if "麦当劳 MCP 接口返回 429" in text:
@@ -294,7 +297,7 @@ async def get_today_recommendation(token):
         calendar_error = True
         lines.append("暂未查询到当日活动信息。")
     else:
-        if is_mcp_error_message(calendar_text) or "401" in calendar_text:
+        if is_mcp_error_message(calendar_text):
             calendar_error = True
             lines.append("查询活动信息时出现问题：")
             lines.append(calendar_text.strip())
@@ -308,7 +311,7 @@ async def get_today_recommendation(token):
         available_error = True
         lines.append("暂未查询到可领券。")
     else:
-        if is_mcp_error_message(available_text) or "401" in available_text:
+        if is_mcp_error_message(available_text):
             available_error = True
             lines.append("查询可领优惠券时出现问题：")
             lines.append(available_text.strip())
