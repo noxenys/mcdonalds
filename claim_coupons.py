@@ -276,8 +276,7 @@ async def get_today_recommendation(token):
         calendar_error = True
         lines.append("暂未查询到当日活动信息。")
     else:
-        cal_lower = calendar_text.lower()
-        if "error" in cal_lower or "401" in calendar_text or "unauthorized" in cal_lower:
+        if is_mcp_error_message(calendar_text) or "401" in calendar_text:
             calendar_error = True
             lines.append("查询活动信息时出现问题：")
             lines.append(calendar_text.strip())
@@ -290,8 +289,7 @@ async def get_today_recommendation(token):
         available_error = True
         lines.append("暂未查询到可领券。")
     else:
-        avl_lower = available_text.lower()
-        if "error" in avl_lower or "401" in available_text or "unauthorized" in avl_lower:
+        if is_mcp_error_message(available_text) or "401" in available_text:
             available_error = True
             lines.append("查询可领优惠券时出现问题：")
             lines.append(available_text.strip())
