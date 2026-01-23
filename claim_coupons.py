@@ -17,7 +17,7 @@ MCP_SERVER_URL = "https://mcp.mcd.cn/mcp-servers/mcd-mcp"
 def cleanup_for_telegram(text):
     """
     Cleans up and formats the text for better Telegram display.
-    Specifically targets coupon lists to remove redundancy and image URLs.
+    Handles both coupon lists and claim results.
     """
     lines = []
     
@@ -39,9 +39,104 @@ def cleanup_for_telegram(text):
         cleaned_raw.append(line)
     raw_lines = cleaned_raw
     
+    # Check if this is an error/failure message
+    full_text = "\n".join(raw_lines)
+    is_error = any(keyword in full_text for keyword in ["失败", "错误", "Error", "error", "无可领取"])
+    
+    if is_error:
+        # Clean up error messages - remove markdown headers, format nicely
+        error_lines = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Remove markdown headers (###, ##, #)
+            if stripped.startswith('#'):
+                stripped = stripped.lstrip('#').strip()
+                # Add emoji if it's the main error title
+                if '失败' in stripped or '错误' in stripped or 'Error' in stripped:
+                    stripped = f"❌ {stripped}"
+            error_lines.append(stripped)
+        
+        # Format with separator
+        if error_lines:
+            SEPARATOR = "━━━━━━━━━━━━━━━━━━━"  # Define locally to avoid circular import
+            result = f"{SEPARATOR}\n"
+            result += "\n".join(error_lines)
+            result += f"\n{SEPARATOR}"
+            return result.strip()
+    
+    # Check if this is a claim result (contains couponId and couponCode)
+    is_claim_result = any("couponId" in line or "couponCode" in line for line in raw_lines)
+    
+    if is_claim_result:
+        # Format claim results: extract coupon name and code, hide technical details
+        formatted_lines = []
+        header_lines = []
+        current_coupon = {}
+        parsed_coupons = []
+        in_coupon_section = False
+        
+        for line in raw_lines:
+            stripped = line.strip()
+            
+            # Capture header/summary lines before coupons
+            if not in_coupon_section and "couponId" not in line and "couponCode" not in line and "图片" not in line:
+                if "###" in stripped or "总计" in stripped or "成功" in stripped or "失败" in stripped:
+                    header_lines.append(stripped.lstrip("#").strip())
+                    continue
+            
+            # Parse coupon details
+            if stripped.startswith("- ") and "：" in stripped:
+                in_coupon_section = True
+                key_value = stripped[2:].split("：", 1)
+                if len(key_value) == 2:
+                    key, value = key_value
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    # Only keep the important fields
+                    if key in ["优惠券标题", "标题", "优惠券名称", "名称"]:
+                        current_coupon['name'] = value
+                    elif key == "couponCode" or key == "券码":
+                        current_coupon['code'] = value
+                    # Skip couponId, 图片, and other technical fields
+            
+            # If we hit a new coupon or end of section, save the current one
+            if current_coupon and (stripped.startswith("## ") or stripped == "" or "优惠券标题" in stripped):
+                if len(current_coupon) > 0:
+                    parsed_coupons.append(current_coupon)
+                    current_coupon = {}
+        
+        # Don't forget the last coupon
+        if current_coupon and len(current_coupon) > 0:
+            parsed_coupons.append(current_coupon)
+        
+        # Format output
+        if header_lines:
+            formatted_lines.append("### 📊 领券统计\n")
+            for h in header_lines:
+                formatted_lines.append(h)
+            formatted_lines.append("")
+        
+        if parsed_coupons:
+            formatted_lines.append("━━━━━━━━━━━━━━━━━━━")
+            formatted_lines.append("")
+            formatted_lines.append("### ✅ 成功领取的优惠券\n")
+            for coupon in parsed_coupons:
+                name = coupon.get('name', '未知优惠券')
+                code = coupon.get('code', '')
+                
+                formatted_lines.append(f"━━━ {name} ━━━")
+                if code:
+                    formatted_lines.append(f"📱 券码：{code}")
+                formatted_lines.append("")
+        
+        return "\n".join(formatted_lines).strip() if formatted_lines else text
+    
+    # Original logic for regular coupon lists
     current_coupon = {}
     coupons = []
-    
     is_coupon_list = False
     
     for line in raw_lines:
@@ -209,8 +304,20 @@ async def claim_for_token(token, enable_push=True):
 async def list_available_coupons(token):
     return await call_mcp_tool(token, "available-coupons", enable_push=False)
 
-async def list_my_coupons(token):
-    return await call_mcp_tool(token, "my-coupons", enable_push=False)
+async def list_my_coupons(token, return_raw=False):
+    """
+    获取我的优惠券
+    
+    Args:
+        token: MCP Token
+        return_raw: 如果为True，返回原始数据（包含有效期信息）；否则返回清理后的数据
+    """
+    if return_raw:
+        # 直接返回原始内容，不经过cleanup（保留有效期信息）
+        return await call_mcp_tool(token, "my-coupons", enable_push=False, return_raw_content=True)
+    else:
+        # 返回清理后的内容（用于显示给用户）
+        return await call_mcp_tool(token, "my-coupons", enable_push=False)
 
 async def list_campaign_calendar(token, date=None, return_raw=False):
     arguments = None
@@ -256,41 +363,43 @@ async def get_today_recommendation(token):
     )
     
     lines = []
-    lines.append(f"📅 今天是 {today}")
-    lines.append("")
+    lines.append(f"📅 {today}")
     
     # 1. 高亮推荐逻辑
     highlights = []
     if available_text:
         # 简单关键词匹配
         if "免费" in available_text or "0元" in available_text:
-            highlights.append("✨ *发现免费羊毛！* 赶紧看看列表！")
+            highlights.append("✨ 发现免费羊毛！赶紧看看列表！")
         if "买一送一" in available_text or "1+1" in available_text:
-            highlights.append("🔥 *有买一送一活动！* 适合找人拼单。")
+            highlights.append("🔥 有买一送活动！适合找人拼单")
         if "半价" in available_text:
-            highlights.append("💰 *半价优惠！* 四舍五入不要钱。")
+            highlights.append("💰 半价优惠！四舍五入不要钱")
     
     if highlights:
-        lines.append("\n".join(highlights))
         lines.append("")
+        lines.append("\n".join(highlights))
 
     # 2. 时段推荐逻辑
     time_tip = ""
     if 5 <= current_hour < 10:
-        time_tip = "🍳 *早餐时段*：来个猪柳蛋堡唤醒灵魂吧！"
+        time_tip = "🍳 早餐时段：来个猪柳蛋堡唤醒灵魂吧"
     elif 11 <= current_hour < 14:
-        time_tip = "🍔 *午餐时段*：1+1随心配，最强穷鬼套餐。"
+        time_tip = "🍔 午餐时段：1+1随心配，最强穷鬼套餐"
     elif 14 <= current_hour < 17:
-        time_tip = "☕ *下午茶时段*：工作累了？点杯咖啡配个派。"
+        time_tip = "☕ 下午茶时段：工作累了？点杯咖啡配个派"
     elif 17 <= current_hour < 21:
-        time_tip = "🍗 *晚餐时段*：今晚吃顿好的，对自己好一点。"
+        time_tip = "🍗 晚餐时段：今晚吃顿好的，对自己好一点"
     elif 21 <= current_hour or current_hour < 5:
-        time_tip = "🌙 *夜宵时段*：虽然会胖，但是炸鸡真香啊..."
+        time_tip = "🌙 夜宵时段：虽然会胖，但是炸鸡真香啊"
         
     if time_tip:
-        lines.append(time_tip)
         lines.append("")
+        lines.append(time_tip)
 
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━")
+    lines.append("")
     lines.append("【今天的活动】")
     calendar_error = False
     if not calendar_text:
@@ -304,6 +413,9 @@ async def get_today_recommendation(token):
         else:
             cal_cleaned = strip_calendar_today_header(calendar_text)
             lines.append(cal_cleaned.strip())
+    
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━")
     lines.append("")
     lines.append("【你当前可领的优惠券】")
     available_error = False

@@ -215,6 +215,63 @@ async def safe_bot_send_message(bot, chat_id, text: str, **kwargs):
         except Exception:
             raise
 
+# ==================== Message Formatting Constants ====================
+
+# Emoji definitions for consistency
+EMOJI_SUCCESS = "✅"
+EMOJI_ERROR = "❌"
+EMOJI_WARNING = "⚠️"
+EMOJI_INFO = "ℹ️"
+EMOJI_ENABLED = "✅"
+EMOJI_DISABLED = "🚫"
+EMOJI_STATS = "📊"
+EMOJI_USER = "👤"
+EMOJI_ID = "🆔"
+EMOJI_CALENDAR = "📅"
+EMOJI_SETTINGS = "⚙️"
+EMOJI_RECORD = "📝"
+EMOJI_HINT = "💡"
+
+# Visual separator
+SEPARATOR = "━━━━━━━━━━━━━━━━━━━"
+
+# Common help text
+COMMAND_HELP_TEXT = """常用命令：
+/claim - 立即领券
+/coupons - 查看当前可领优惠券
+/mycoupons - 查看你已拥有的优惠券
+/calendar - 查看活动日历
+/today - 今日智能用券建议
+/status - 查看当前状态
+/stats - 查看领券统计
+/autoclaim on/off - 开启或关闭每日自动领券
+/account add/use/list/del - 多账号管理
+/unbind - 解除绑定
+/admin - 管理员总览"""
+
+# Message formatting helper functions
+def format_error_msg(message: str, show_help: bool = False) -> str:
+    """Format error message with consistent style."""
+    msg = f"{EMOJI_ERROR} {message}"
+    if show_help:
+        msg += f"\n\n{EMOJI_HINT} 需要帮助？发送 /help 查看使用说明"
+    return msg
+
+def format_success_msg(message: str, extra: str = "") -> str:
+    """Format success message with consistent style."""
+    msg = f"{EMOJI_SUCCESS} {message}"
+    if extra:
+        msg += f"\n\n{extra}"
+    return msg
+
+def format_warning_msg(message: str) -> str:
+    """Format warning message with consistent style."""
+    return f"{EMOJI_WARNING} {message}"
+
+def format_info_msg(message: str) -> str:
+    """Format info message with consistent style."""
+    return f"{EMOJI_INFO} {message}"
+
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -480,22 +537,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     await update.message.reply_text(
-        "👋 欢迎使用麦当劳自动领券 Bot！\n\n"
-        "请先发送你的 MCP Token 给我完成绑定。\n"
-        "获取地址：https://open.mcd.cn/mcp/console\n\n"
-        "你可以直接使用底部的菜单按钮，也可以使用以下命令：\n"
-        "/claim - 立即领券\n"
-        "/coupons - 查看当前可领优惠券\n"
-        "/mycoupons - 查看你已拥有的优惠券\n"
-        "/calendar - 查看活动日历\n"
-        "/today - 今日智能用券建议\n"
-        "/status - 查看当前状态\n"
-        "/stats - 查看领券统计\n"
-        "/autoclaim on/off - 开启或关闭每日自动领券\n"
-        "/account add/use/list/del - 多账号管理\n"
-        "/unbind - 解除绑定\n"
-        "/admin - 管理员总览\n"
-        "/help - 查看帮助",
+        "👋 欢迎使用麦当劳自动领券 Bot！\n"
+        f"{SEPARATOR}\n\n"
+        "🔑 请先发送你的 MCP Token 给我完成绑定\n"
+        "🔗 获取地址：https://open.mcd.cn/mcp/console\n\n"
+        f"{SEPARATOR}\n\n"
+        "📱 你可以直接使用底部菜单按钮，也可以使用以下命令：\n\n"
+        f"{COMMAND_HELP_TEXT}",
         reply_markup=reply_markup
     )
 
@@ -514,7 +562,7 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     token = args[0]
     if len(token) < 20:
-        await update.message.reply_text("❌ Token 看起来太短了，请检查是否正确。")
+        await update.message.reply_text(format_error_msg("Token 看起来太短了，请检查是否正确"))
         return
 
     await update.message.reply_text("🔍 正在验证你的 Token，请稍等...")
@@ -527,29 +575,21 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         save_user_token(user_id, username, token)
         await update.message.reply_text(
-            f"✅ Token 验证成功并已保存！\n\n"
-            f"我已经帮你执行了一次领券：\n{result}\n\n"
-            f"之后我会在每天 10:30 自动为你领券。"
+            format_success_msg(
+                "Token 验证成功并已保存！",
+                f"{SEPARATOR}\n\n{result}\n\n{SEPARATOR}\n\n⏰ 之后我会在每天 10:30 自动为你领券"
+            )
         )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "使用说明：\n"
-        "1. 先在 https://open.mcd.cn/mcp/console 获取你的 MCP Token。\n"
-        "2. 将 Token 直接发送给我完成绑定。\n"
-        "3. 绑定后，我会在每天 10:30 自动帮你领券。\n\n"
-        "常用命令：\n"
-        "/claim - 立即领券\n"
-        "/coupons - 查看当前可领优惠券\n"
-        "/mycoupons - 查看你已拥有的优惠券\n"
-        "/calendar - 查看活动日历\n"
-        "/today - 今日智能用券建议\n"
-        "/status - 查看当前状态\n"
-        "/stats - 查看领券统计\n"
-        "/autoclaim on/off - 开启或关闭每日自动领券\n"
-        "/account add/use/list/del - 多账号管理\n"
-        "/unbind - 解除绑定\n"
-        "/admin - 管理员总览"
+        "📖 使用说明\n"
+        f"{SEPARATOR}\n\n"
+        "1. 先在 https://open.mcd.cn/mcp/console 获取你的 MCP Token\n"
+        "2. 将 Token 直接发送给我完成绑定\n"
+        "3. 绑定后，我会在每天 10:30 自动帮你领券\n\n"
+        f"{SEPARATOR}\n\n"
+        f"{COMMAND_HELP_TEXT}"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -587,7 +627,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             result = await claim_for_token(text, enable_push=False)
             
             if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
-                 await update.message.reply_text(f"❌ Token 无效或连接失败。\n{result}")
+                 await update.message.reply_text(format_error_msg(f"Token 无效或连接失败\n{result}", show_help=True))
             else:
                 save_user_token(user_id, username, text)
                 await update.message.reply_text(
@@ -853,7 +893,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     row = get_user_stats_and_status(user_id)
 
     if not token or not row:
-        await update.message.reply_text("⚠️ 你还没有绑定 MCP Token，请先把 Token 发给我。")
+        await update.message.reply_text(format_warning_msg("你还没有绑定 MCP Token，请先把 Token 发给我"))
         return
 
     username, auto_claim_enabled, claim_report_enabled, last_claim_at, last_claim_success, total_success, total_failed, created_at = row
@@ -874,14 +914,20 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         last_result_text = "失败"
 
     msg = (
-        "📊 当前账号状态：\n\n"
-        f"用户：@{username or '未知'}（ID: {user_id}）\n"
-        "绑定状态：已绑定\n"
-        f"自动领券：{'✅ 已开启' if auto_enabled else '🚫 已关闭'}\n"
-        f"领券汇报：{'✅ 已开启' if report_enabled else '🚫 已关闭'}\n"
-        f"上次领券时间：{last_claim_at or '暂无记录'}\n"
-        f"上次结果：{last_result_text}\n"
-        "提示：如果你最近收到 Token 失效的提示，并看到自动领券已关闭，很可能是系统为减少无效请求自动暂停了该账号的每日领券。更新 Token 后可以使用 /autoclaim on 重新开启自动领券。\n"
+        f"{EMOJI_STATS} 当前账号状态\n"
+        f"{SEPARATOR}\n\n"
+        f"{EMOJI_USER} 用户：@{username or '未知'}\n"
+        f"{EMOJI_ID} ID：{user_id}\n\n"
+        f"{SEPARATOR}\n\n"
+        f"{EMOJI_SETTINGS} 功能设置\n"
+        f"自动领券：{EMOJI_ENABLED + ' 已开启' if auto_enabled else EMOJI_DISABLED + ' 已关闭'}\n"
+        f"领券汇报：{EMOJI_ENABLED + ' 已开启' if report_enabled else EMOJI_DISABLED + ' 已关闭'}\n\n"
+        f"{SEPARATOR}\n\n"
+        f"{EMOJI_RECORD} 领券记录\n"
+        f"上次时间：{last_claim_at or '暂无记录'}\n"
+        f"上次结果：{last_result_text}\n\n"
+        f"{EMOJI_HINT} 提示：Token失效时系统会自动关闭自动领券\n"
+        "   更新Token后使用 /autoclaim on 重新开启"
     )
 
     await update.message.reply_text(msg)
@@ -892,7 +938,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     row = get_user_stats_and_status(user_id)
 
     if not token or not row:
-        await update.message.reply_text("⚠️ 暂无数据，你还没有绑定 MCP Token 或从未领过券。")
+        await update.message.reply_text(format_warning_msg("暂无数据，你还没有绑定 MCP Token 或从未领过券"))
         return
 
     _, _, _, _, _, total_success, total_failed, _ = row
@@ -918,11 +964,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         luck_status = "\n(运势：✨ 欧皇降临)"
 
     msg = (
-        "📈 你的领券统计：\n\n"
+        "📈 你的领券统计\n"
+        f"{SEPARATOR}\n\n"
         f"当前称号：{title}\n"
         f"总尝试次数：{total}\n"
         f"成功次数：{success_count}\n"
-        f"失败次数：{failed_count}{luck_status}\n"
+        f"失败次数：{failed_count}{luck_status}"
     )
 
     await update.message.reply_text(msg)
@@ -1277,6 +1324,138 @@ async def scheduled_today_job(application: Application):
     await asyncio.gather(*tasks)
     logger.info("Scheduled today recommendation complete.")
 
+# ==================== New Feature: Expiry Reminder ====================
+from coupon_utils import check_expiring_soon, format_expiry_reminder
+
+async def scheduled_expiry_check(application: Application):
+    """检查所有用户的优惠券过期情况并发送提醒"""
+    logger.info("Running scheduled expiry check...")
+    users = get_all_users()
+    
+    for user_id, token, _ in users:
+        if not token:
+            continue
+        
+        try:
+            # 获取用户的优惠券（获取原始数据，包含有效期信息）
+            raw_coupons = await list_my_coupons(token, return_raw=True)
+            if not raw_coupons:
+                continue
+            
+            # 转换为文本格式
+            coupons_text = ""
+            for content in raw_coupons:
+                if content.type == "text":
+                    coupons_text += content.text + "\n"
+            
+            if not coupons_text or is_mcp_error_message(coupons_text):
+                continue
+            
+            # 检查即将过期的券（3天内）
+            expiring = check_expiring_soon(coupons_text, days_threshold=3)
+            
+            if expiring:
+                reminder_msg = format_expiry_reminder(expiring)
+                await safe_bot_send_message(application.bot, user_id, reminder_msg)
+                logger.info(f"Sent expiry reminder to user {user_id}, {len(expiring)} coupons expiring")
+        
+        except Exception as e:
+            logger.error(f"Failed to check expiry for user {user_id}: {e}")
+        
+        # 避免请求过快
+        await asyncio.sleep(0.5)
+    
+    logger.info("Scheduled expiry check complete.")
+
+async def scheduled_meal_reminder(application: Application, meal_type: str):
+    """
+    用餐时间智能提醒（午餐或晚餐）
+    
+    Args:
+        meal_type: "lunch" 或 "dinner"
+    """
+    logger.info(f"Running scheduled meal reminder ({meal_type})...")
+    users = get_all_users()
+    
+    # 设置问候语
+    if meal_type == "lunch":
+        greeting = "🍔 午餐时间到！"
+        time_hint = "中午"
+    else:
+        greeting = "🍗 晚餐时间到！"
+        time_hint = "晚上"
+    
+    for user_id, token, _ in users:
+        if not token:
+            continue
+        
+        try:
+            # 获取用户已领取的优惠券
+            raw_coupons = await list_my_coupons(token, return_raw=True)
+            if not raw_coupons:
+                continue
+            
+            # 转换为文本格式
+            coupons_text = ""
+            for content in raw_coupons:
+                if content.type == "text":
+                    coupons_text += content.text + "\n"
+            
+            if not coupons_text or is_mcp_error_message(coupons_text):
+                continue
+            
+            # 解析优惠券（简单提取券名）
+            available_coupons = []
+            lines = coupons_text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line.startswith('##'):
+                    # 提取券名
+                    coupon_name = line.lstrip('#').strip()
+                    if coupon_name and coupon_name != '您的优惠券列表':
+                        available_coupons.append(coupon_name)
+            
+            # 只推送有券的用户
+            if not available_coupons:
+                continue
+            
+            # 限制显示数量
+            show_count = min(len(available_coupons), 5)
+            
+            # 构建消息
+            msg_parts = [
+                greeting,
+                SEPARATOR,
+                "",
+                f"你有 {len(available_coupons)} 张优惠券可用：",
+                ""
+            ]
+            
+            for i, coupon in enumerate(available_coupons[:show_count], 1):
+                msg_parts.append(f"{i}. {coupon}")
+            
+            if len(available_coupons) > show_count:
+                msg_parts.append(f"\n还有{len(available_coupons) - show_count}张券...")
+            
+            msg_parts.extend([
+                "",
+                f"💡 {time_hint}用券最划算，记得使用哦~",
+                "",
+                "发送 /mycoupons 查看详情"
+            ])
+            
+            reminder_msg = "\n".join(msg_parts)
+            await safe_bot_send_message(application.bot, user_id, reminder_msg)
+            logger.info(f"Sent {meal_type} reminder to user {user_id}, {len(available_coupons)} coupons available")
+        
+        except Exception as e:
+            logger.error(f"Failed to send {meal_type} reminder to user {user_id}: {e}")
+        
+        # 避免请求过快
+        await asyncio.sleep(0.5)
+    
+    logger.info(f"Scheduled {meal_type} reminder complete.")
+
 async def post_init(application: Application) -> None:
     """
     Set up bot commands menu on startup.
@@ -1310,10 +1489,19 @@ def run_scheduler(application, loop):
         asyncio.run_coroutine_threadsafe(scheduled_job(application), loop)
     def job_wrapper_today():
         asyncio.run_coroutine_threadsafe(scheduled_today_job(application), loop)
+    def job_wrapper_expiry():
+        asyncio.run_coroutine_threadsafe(scheduled_expiry_check(application), loop)
+    def job_wrapper_lunch():
+        asyncio.run_coroutine_threadsafe(scheduled_meal_reminder(application, "lunch"), loop)
+    def job_wrapper_dinner():
+        asyncio.run_coroutine_threadsafe(scheduled_meal_reminder(application, "dinner"), loop)
 
     # Schedule daily tasks
-    schedule.every().day.at("10:30").do(job_wrapper_claim)
-    schedule.every().day.at("10:35").do(job_wrapper_today)
+    schedule.every().day.at("10:30").do(job_wrapper_claim)   # 自动领券
+    schedule.every().day.at("10:35").do(job_wrapper_today)   # 今日推荐
+    schedule.every().day.at("11:30").do(job_wrapper_lunch)   # 午餐提醒
+    schedule.every().day.at("17:30").do(job_wrapper_dinner)  # 晚餐提醒
+    schedule.every().day.at("20:00").do(job_wrapper_expiry)  # 过期提醒
     
     while True:
         schedule.run_pending()
