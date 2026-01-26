@@ -87,29 +87,48 @@ def cleanup_for_telegram(text):
                     continue
             
             # Parse coupon details
-            if stripped.startswith("- ") and "：" in stripped:
+            # Structure typically looks like:
+            # - Coupon Name
+            # - couponId: ...
+            # - couponCode: ...
+            if stripped.startswith("- "):
                 in_coupon_section = True
-                key_value = stripped[2:].split("：", 1)
-                if len(key_value) == 2:
-                    key, value = key_value
+                content = stripped[2:].strip()
+                
+                # Check for key-value pair (support both : and ：)
+                has_colon = "：" in content or ": " in content
+                
+                if has_colon:
+                    key = None
+                    value = None
+                    if "：" in content:
+                        key, value = content.split("：", 1)
+                    else:
+                        key, value = content.split(": ", 1)
+                        
                     key = key.strip()
                     value = value.strip()
                     
-                    # Only keep the important fields
                     if key in ["优惠券标题", "标题", "优惠券名称", "名称"]:
                         current_coupon['name'] = value
-                    elif key == "couponCode" or key == "券码":
-                        current_coupon['code'] = value
-                    # Skip couponId, 图片, and other technical fields
-            
-            # If we hit a new coupon or end of section, save the current one
-            if current_coupon and (stripped.startswith("## ") or stripped == "" or "优惠券标题" in stripped):
-                if len(current_coupon) > 0:
+                    # ignore couponId, couponCode, 图片 etc.
+                else:
+                    # No colon, assume it's the coupon name
+                    # If we already have a name, it means we missed the end of the previous coupon
+                    # or this is the start of a new one. Push the previous one.
+                    if current_coupon.get('name'):
+                        parsed_coupons.append(current_coupon)
+                        current_coupon = {}
+                    current_coupon['name'] = content
+
+            # Handle empty lines or section breaks as separators
+            elif not stripped or "---" in stripped:
+                 if current_coupon:
                     parsed_coupons.append(current_coupon)
                     current_coupon = {}
-        
+
         # Don't forget the last coupon
-        if current_coupon and len(current_coupon) > 0:
+        if current_coupon:
             parsed_coupons.append(current_coupon)
         
         # Format output
@@ -125,12 +144,8 @@ def cleanup_for_telegram(text):
             formatted_lines.append("### ✅ 成功领取的优惠券\n")
             for coupon in parsed_coupons:
                 name = coupon.get('name', '未知优惠券')
-                code = coupon.get('code', '')
-                
-                formatted_lines.append(f"━━━ {name} ━━━")
-                if code:
-                    formatted_lines.append(f"📱 券码：{code}")
-                formatted_lines.append("")
+                formatted_lines.append(f"• {name}")
+            formatted_lines.append("")
         
         return "\n".join(formatted_lines).strip() if formatted_lines else text
     

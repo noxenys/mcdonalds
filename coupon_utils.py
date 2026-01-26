@@ -72,14 +72,26 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
                 current_coupon = {}
             continue
         
-        # 检测优惠券标题
-        if line.startswith('-') or line.startswith('•') or line.startswith('##'):
+        title_match = re.search(r'(优惠券标题|标题|名称)[：:]\s*(.+)', line)
+        if title_match:
+            title = title_match.group(2).strip()
             if current_coupon:
                 expiring_coupons.append(current_coupon)
-            
-            # 提取标题
-            title = re.sub(r'^[-•#\s]+', '', line).strip()
             current_coupon = {'name': title, 'raw_text': line}
+        else:
+            is_metadata = any(keyword in line for keyword in ['有效期', '状态', 'coupon', '图片', 'http', '券码', '使用规则'])
+            if (line.startswith('-') or line.startswith('•') or line.startswith('##')) and not is_metadata:
+                if current_coupon:
+                    expiring_coupons.append(current_coupon)
+                
+                title = re.sub(r'^[-•#\s]+', '', line).strip()
+                
+                if title.startswith('优惠券标题：'):
+                    title = title.replace('优惠券标题：', '').strip()
+                elif title.startswith('标题：'):
+                    title = title.replace('标题：', '').strip()
+                    
+                current_coupon = {'name': title, 'raw_text': line}
         
         # 检测有效期
         expiry = parse_expiry_date(line)
@@ -207,7 +219,13 @@ def format_expiry_reminder(expiring_coupons: List[Dict]) -> str:
         else:
             urgency = f"🟡 {days_left}天后过期"
         
-        msg_parts.append(f"{urgency} {coupon['name']}")
+        name = coupon.get('name') or "未识别券名"
+        expiry_dt = coupon.get('expiry_date')
+        if expiry_dt:
+            expiry_str = expiry_dt.strftime('%Y-%m-%d')
+            msg_parts.append(f"{urgency} {name}（有效期至 {expiry_str}）")
+        else:
+            msg_parts.append(f"{urgency} {name}")
     
     msg_parts.extend(["", "💡 记得及时使用，不要浪费哦~"])
     
