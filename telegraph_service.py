@@ -84,6 +84,17 @@ class TelegraphService:
             raise Exception(f"Failed to create Telegraph page: {data}")
 
     @staticmethod
+    def _clean_text(text):
+        if not isinstance(text, str):
+            return str(text) if text is not None else ""
+        # Remove Markdown bold/italic/code markers
+        text = text.replace("**", "").replace("__", "")
+        text = text.replace("*", "") # Remove single asterisks too
+        text = text.replace("`", "")
+        text = text.replace("\\", "")
+        return text.strip()
+
+    @staticmethod
     def format_calendar_to_nodes(calendar_data):
         """
         Converts calendar data (list of dicts) to Telegraph Nodes.
@@ -107,30 +118,36 @@ class TelegraphService:
 
         for item in calendar_data:
             # Item Title
-            title = item.get("title", "未知活动")
-            nodes.append({"tag": "h4", "children": [title]})
+            title = TelegraphService._clean_text(item.get("title", "未知活动"))
+            nodes.append({"tag": "h3", "children": [title]})
             
-            # Image
-            image_url = item.get("image") or item.get("imageUrl") or item.get("img")
-            if image_url:
-                nodes.append({"tag": "figure", "children": [
-                    {"tag": "img", "attrs": {"src": image_url}}
-                ]})
-
             # Date
             start = item.get("start", "")
             end = item.get("end", "")
             if start or end:
-                date_str = f"时间: {start} - {end}"
-                nodes.append({"tag": "p", "children": [{"tag": "b", "children": [date_str]}]})
+                date_str = f"{start} - {end}"
+                nodes.append({"tag": "p", "children": [
+                    {"tag": "b", "children": ["活动时间: "]},
+                    date_str
+                ]})
 
+            # Content
             content = item.get("content") or item.get("desc")
             if content:
+                nodes.append({"tag": "p", "children": [{"tag": "b", "children": ["活动详情:"]}]})
                 for line in str(content).splitlines():
-                    l = line.strip()
+                    l = TelegraphService._clean_text(line)
                     if not l:
                         continue
                     nodes.append({"tag": "p", "children": [l]})
+
+            # Image
+            image_url = item.get("image") or item.get("imageUrl") or item.get("img")
+            if image_url:
+                nodes.append({"tag": "figure", "children": [
+                    {"tag": "img", "attrs": {"src": image_url}},
+                    {"tag": "figcaption", "children": ["活动海报"]}
+                ]})
             
             nodes.append({"tag": "hr"})
 

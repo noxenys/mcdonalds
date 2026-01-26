@@ -83,7 +83,8 @@ def cleanup_for_telegram(text):
             # Capture header/summary lines before coupons
             if not in_coupon_section and "couponId" not in line and "couponCode" not in line and "图片" not in line:
                 if "###" in stripped or "总计" in stripped or "成功" in stripped or "失败" in stripped:
-                    header_lines.append(stripped.lstrip("#").strip())
+                    clean_header = stripped.lstrip("#").strip().replace("**", "").replace("\\", "")
+                    header_lines.append(clean_header)
                     continue
             
             # Parse coupon details
@@ -110,7 +111,7 @@ def cleanup_for_telegram(text):
                     value = value.strip()
                     
                     if key in ["优惠券标题", "标题", "优惠券名称", "名称"]:
-                        current_coupon['name'] = value
+                        current_coupon['name'] = value.replace("**", "").replace("\\", "")
                     # ignore couponId, couponCode, 图片 etc.
                 else:
                     # No colon, assume it's the coupon name
@@ -119,7 +120,7 @@ def cleanup_for_telegram(text):
                     if current_coupon.get('name'):
                         parsed_coupons.append(current_coupon)
                         current_coupon = {}
-                    current_coupon['name'] = content
+                    current_coupon['name'] = content.replace("**", "").replace("\\", "")
 
             # Handle empty lines or section breaks as separators
             elif not stripped or "---" in stripped:
@@ -164,7 +165,9 @@ def cleanup_for_telegram(text):
             is_coupon_list = True
             
         if not is_coupon_list:
-            lines.append(line)
+            # Clean generic lines
+            cleaned_line = line.replace("**", "").replace("\\", "")
+            lines.append(cleaned_line)
             continue
 
         # Parse coupon fields
@@ -178,11 +181,11 @@ def cleanup_for_telegram(text):
                 title = line.lstrip("#").strip()
             else:
                 title = line.split("：", 1)[1].strip()
-            current_coupon['title'] = title
+            current_coupon['title'] = title.replace("**", "").replace("\\", "")
             
         elif line.startswith("- 状态：") or line.startswith("状态："):
             status = line.split("：", 1)[1].strip()
-            current_coupon['status'] = status
+            current_coupon['status'] = status.replace("**", "").replace("\\", "")
             
         # Ignore noisy lines that只包含图片说明或纯链接
         elif "优惠券图片" in line:
@@ -218,7 +221,9 @@ def cleanup_for_telegram(text):
         # Remove lines that are just URLs
         if line.strip().startswith("http"):
             continue
-        cleaned.append(line)
+        # Global cleanup for fallback text
+        l = line.replace("**", "").replace("\\", "")
+        cleaned.append(l)
         
     return "\n".join(cleaned).strip()
 
@@ -364,16 +369,20 @@ async def list_campaign_calendar(token, date=None, return_raw=False):
     return await call_mcp_tool(token, "campaign-calender", arguments=arguments, enable_push=False)
 
 from quotes import MCD_QUOTES
-import random
+from datetime import datetime, timedelta, timezone
 
 async def get_today_recommendation(token):
     if not token or token == "your_token_here":
         return "Error: Invalid Token."
-    today = time.strftime("%Y-%m-%d")
-    current_hour = int(time.strftime("%H"))
+    
+    # Force China Standard Time (UTC+8) calculation
+    utc_now = datetime.now(timezone.utc)
+    cst_now = utc_now + timedelta(hours=8)
+    today = cst_now.strftime("%Y-%m-%d")
+    current_hour = cst_now.hour
    
     calendar_text, available_text = await asyncio.gather(
-        list_campaign_calendar(token),
+        list_campaign_calendar(token, date=today),
         list_available_coupons(token)
     )
     
