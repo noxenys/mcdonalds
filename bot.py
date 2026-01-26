@@ -833,7 +833,9 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     progress_msg = await update.message.reply_text("🤖 正在结合活动日历和可领优惠券为你生成今天的用券建议，请稍等...")
     try:
         result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
-        if is_mcp_error_message(result):
+        
+        # 检查结果是否为空或错误
+        if not result or is_mcp_error_message(result):
             if progress_msg:
                 try:
                     await progress_msg.delete()
@@ -850,6 +852,18 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         raw_calendar = await list_campaign_calendar(token, date=today_str, return_raw=True)
         sanitized = sanitize_text(result)
+        
+        # 再次检查sanitized结果是否为空
+        if not sanitized or len(sanitized.strip()) < 10:
+            if progress_msg:
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
+                progress_msg = None
+            await update.message.reply_text("⚠️ 今日推荐内容为空，可能是服务异常，请稍后再试。")
+            return
+        
         page_url = None
         try:
             page_url = await telegraph_service.create_page(
@@ -858,6 +872,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         except Exception as e:
             logger.error(f"Telegraph page error: {e}")
+        
         if page_url:
             summary = sanitized[:300] + ("..." if len(sanitized) > 300 else "")
             msg = f"📄 今日推荐（图文版）：{page_url}\n\n{summary}"
@@ -874,6 +889,19 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(
             "⏰ 今日推荐生成超时，可能是麦当劳 MCP 服务响应过慢。\n"
             "你可以先使用 /coupons 和 /calendar 单独查看，稍后再试 /today。"
+        )
+    except Exception as e:
+        logger.error(f"Today command failed for user {user_id}: {e}", exc_info=True)
+        if progress_msg:
+            try:
+                await progress_msg.delete()
+            except Exception:
+                pass
+            progress_msg = None
+        await update.message.reply_text(
+            f"❌ 生成今日推荐时出现错误，请稍后再试。\n\n"
+            f"💡 提示：你可以先使用 /coupons 和 /calendar 单独查看。\n\n"
+            f"错误详情：{str(e)[:100]}"
         )
     finally:
         if progress_msg:
@@ -1328,10 +1356,20 @@ async def process_user_today(application: Application, user_id, token, semaphore
         try:
             logger.info(f"Generating today recommendation for user {user_id}")
             result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
-            if is_mcp_error_message(result):
+            
+            # 检查结果是否为空或错误
+            if not result or is_mcp_error_message(result):
                 await safe_bot_send_message(application.bot, user_id, "今天麦当劳 MCP 服务似乎挂了，我暂时没法生成今日推荐，可以稍后再试一次。")
                 return
+            
             raw_calendar = await list_campaign_calendar(token, return_raw=True)
+            sanitized = sanitize_text(result)
+            
+            # 检查sanitized结果
+            if not sanitized or len(sanitized.strip()) < 10:
+                await safe_bot_send_message(application.bot, user_id, "⚠️ 今日推荐内容为空，可能是服务异常，请稍后再试。")
+                return
+            
             page_url = None
             try:
                 page_url = await telegraph_service.create_page(
@@ -1340,16 +1378,18 @@ async def process_user_today(application: Application, user_id, token, semaphore
                 )
             except Exception as e:
                 logger.error(f"Telegraph page error (today) for {user_id}: {e}")
-            summary = sanitize_text(result)[:300] + ("..." if len(result) > 300 else "")
+            
             if page_url:
+                summary = sanitized[:300] + ("..." if len(sanitized) > 300 else "")
                 msg = f"📄 今日推荐（图文版）：{page_url}\n\n{summary}"
                 await safe_bot_send_message(application.bot, user_id, msg)
             else:
-                await send_chunked_update(application, user_id, sanitize_text(result))
+                await send_chunked_update(application, user_id, sanitized)
         except asyncio.TimeoutError:
             await safe_bot_send_message(application.bot, user_id, "⏰ 今日推荐生成超时，稍后再试。")
         except Exception as e:
-            logger.error(f"Failed to generate today recommendation for user {user_id}: {e}")
+            logger.error(f"Failed to generate today recommendation for user {user_id}: {e}", exc_info=True)
+            await safe_bot_send_message(application.bot, user_id, f"❌ 生成今日推荐时出现错误：{str(e)[:100]}")
 
 async def scheduled_today_job(application: Application):
     logger.info("Running scheduled daily today-recommendation for all users...")
