@@ -427,6 +427,8 @@ async def get_today_recommendation(token):
             lines.append(calendar_text.strip())
         else:
             cal_cleaned = strip_calendar_today_header(calendar_text)
+            # Remove raw Markdown bold syntax like **Title**
+            cal_cleaned = cal_cleaned.replace("**", "")
             lines.append(cal_cleaned.strip())
     
     lines.append("")
