@@ -3,8 +3,19 @@
 提供优惠券有效期检测、每日精选分析等功能
 """
 import re
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from datetime import datetime, timedelta, timezone
+
+def get_cst_now():
+    """获取当前北京时间"""
+    utc_now = datetime.now(timezone.utc)
+    return utc_now + timedelta(hours=8)
+
+def clean_markdown_text(text: str) -> str:
+    """清理 Markdown 格式文本"""
+    if not isinstance(text, str):
+        return str(text) if text is not None else ""
+    # Remove Markdown bold/italic/code markers and backslashes
+    return text.replace("**", "").replace("__", "").replace("*", "").replace("`", "").replace("\\", "").strip()
 
 def parse_expiry_date(text: str) -> Optional[datetime]:
     """
@@ -25,10 +36,11 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
     if match:
         month, day = match.groups()
         try:
-            year = datetime.now().year
+            now = get_cst_now()
+            year = now.year
             date = datetime(year, int(month), int(day))
             # 如果日期已过，可能是明年的
-            if date < datetime.now():
+            if date < now:
                 date = datetime(year + 1, int(month), int(day))
             return date
         except ValueError:
@@ -57,7 +69,15 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
         即将过期的优惠券列表
     """
     expiring_coupons = []
-    now = datetime.now()
+    now = get_cst_now()
+    # Ensure now is naive for comparison if parsed dates are naive, or handle tz
+    # datetime(...) creates naive objects by default. 
+    # But get_cst_now returns tz-aware. 
+    # To compare with naive dates from parse_expiry_date (which uses datetime(y,m,d)), 
+    # we should make now naive or make parsed dates aware.
+    # Simpler to make now naive (stripping tzinfo) since we manually adjusted to CST.
+    now = now.replace(tzinfo=None)
+    
     threshold_date = now + timedelta(days=days_threshold)
     
     # 解析优惠券文本，按行或按段落分割
@@ -237,7 +257,9 @@ def format_daily_highlights(highlights: List[Dict]) -> str:
         return ""
     
     SEPARATOR = "━━━━━━━━━━━━━━━━━━━"
-    current_hour = datetime.now().hour
+    # Use CST for hour check
+    now = get_cst_now()
+    current_hour = now.hour
     
     # 根据时段调整问候语
     if 5 <= current_hour < 12:

@@ -9,10 +9,15 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from notify import push_all
+from coupon_utils import get_cst_now, clean_markdown_text
 
 load_dotenv()
 
 MCP_SERVER_URL = "https://mcp.mcd.cn/mcp-servers/mcd-mcp"
+
+def clean_text(text):
+    """Clean markdown formatting from text"""
+    return clean_markdown_text(text)
 
 def cleanup_for_telegram(text):
     """
@@ -83,7 +88,7 @@ def cleanup_for_telegram(text):
             # Capture header/summary lines before coupons
             if not in_coupon_section and "couponId" not in line and "couponCode" not in line and "图片" not in line:
                 if "###" in stripped or "总计" in stripped or "成功" in stripped or "失败" in stripped:
-                    clean_header = stripped.lstrip("#").strip().replace("**", "").replace("\\", "")
+                    clean_header = clean_text(stripped.lstrip("#"))
                     header_lines.append(clean_header)
                     continue
             
@@ -111,7 +116,7 @@ def cleanup_for_telegram(text):
                     value = value.strip()
                     
                     if key in ["优惠券标题", "标题", "优惠券名称", "名称"]:
-                        current_coupon['name'] = value.replace("**", "").replace("\\", "")
+                        current_coupon['name'] = clean_text(value)
                     # ignore couponId, couponCode, 图片 etc.
                 else:
                     # No colon, assume it's the coupon name
@@ -120,7 +125,7 @@ def cleanup_for_telegram(text):
                     if current_coupon.get('name'):
                         parsed_coupons.append(current_coupon)
                         current_coupon = {}
-                    current_coupon['name'] = content.replace("**", "").replace("\\", "")
+                    current_coupon['name'] = clean_text(content)
 
             # Handle empty lines or section breaks as separators
             elif not stripped or "---" in stripped:
@@ -166,7 +171,7 @@ def cleanup_for_telegram(text):
             
         if not is_coupon_list:
             # Clean generic lines
-            cleaned_line = line.replace("**", "").replace("\\", "")
+            cleaned_line = clean_text(line)
             lines.append(cleaned_line)
             continue
 
@@ -181,11 +186,11 @@ def cleanup_for_telegram(text):
                 title = line.lstrip("#").strip()
             else:
                 title = line.split("：", 1)[1].strip()
-            current_coupon['title'] = title.replace("**", "").replace("\\", "")
+            current_coupon['title'] = clean_text(title)
             
         elif line.startswith("- 状态：") or line.startswith("状态："):
             status = line.split("：", 1)[1].strip()
-            current_coupon['status'] = status.replace("**", "").replace("\\", "")
+            current_coupon['status'] = clean_text(status)
             
         # Ignore noisy lines that只包含图片说明或纯链接
         elif "优惠券图片" in line:
@@ -222,7 +227,7 @@ def cleanup_for_telegram(text):
         if line.strip().startswith("http"):
             continue
         # Global cleanup for fallback text
-        l = line.replace("**", "").replace("\\", "")
+        l = clean_text(line)
         cleaned.append(l)
         
     return "\n".join(cleaned).strip()
@@ -376,8 +381,7 @@ async def get_today_recommendation(token):
         return "Error: Invalid Token."
     
     # Force China Standard Time (UTC+8) calculation
-    utc_now = datetime.now(timezone.utc)
-    cst_now = utc_now + timedelta(hours=8)
+    cst_now = get_cst_now()
     today = cst_now.strftime("%Y-%m-%d")
     current_hour = cst_now.hour
    
@@ -474,7 +478,8 @@ async def main():
     await claim_for_token(token, enable_push=True)
 
 async def run_task():
-    print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Starting scheduled task...")
+    cst_now = get_cst_now()
+    print(f"\n[{cst_now.strftime('%Y-%m-%d %H:%M:%S')}] Starting scheduled task...")
     await main()
 
 def job():

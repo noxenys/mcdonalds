@@ -40,6 +40,7 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
 from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message
+from coupon_utils import get_cst_now, clean_markdown_text
 
 async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: int = 3500):
     if not text:
@@ -105,14 +106,7 @@ from telegraph_service import TelegraphService
 IMG_URL_RE = re.compile(r"<img[^>]*src=\"([^\"]+)\"", re.IGNORECASE)
 
 def clean_markdown(text):
-    if not isinstance(text, str):
-        return str(text) if text is not None else ""
-    # Remove Markdown bold/italic/code markers
-    text = text.replace("**", "").replace("__", "")
-    text = text.replace("*", "") 
-    text = text.replace("`", "")
-    text = text.replace("\\", "")
-    return text.strip()
+    return clean_markdown_text(text)
 
 def build_telegraph_nodes_from_text(text: str, title: str) -> list:
     if not text:
@@ -530,7 +524,7 @@ def update_claim_stats(user_id, success):
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
         if user:
-            user.last_claim_at = datetime.now()
+            user.last_claim_at = get_cst_now()
             user.last_claim_success = 1 if success else 0
             user.total_success = (user.total_success or 0) + (1 if success else 0)
             user.total_failed = (user.total_failed or 0) + (0 if success else 1)
@@ -711,8 +705,7 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # If no date argument, assume today in CST
     if not date:
-        utc_now = datetime.now(timezone.utc)
-        cst_now = utc_now + timedelta(hours=8)
+        cst_now = get_cst_now()
         date = cst_now.strftime("%Y-%m-%d")
 
     progress_msg = await update.message.reply_text("🗓️ 正在为你查询活动日历，请稍等...")
