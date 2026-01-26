@@ -846,8 +846,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
         
         # Calculate today in CST (UTC+8)
-        utc_now = datetime.now(timezone.utc)
-        cst_now = utc_now + timedelta(hours=8)
+        cst_now = get_cst_now()
         today_str = cst_now.strftime("%Y-%m-%d")
 
         raw_calendar = await list_campaign_calendar(token, date=today_str, return_raw=True)
