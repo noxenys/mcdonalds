@@ -33,6 +33,7 @@ import asyncio
 import time
 import threading
 import schedule
+from datetime import datetime
 from flask import Flask
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -498,7 +499,7 @@ def update_claim_stats(user_id, success):
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
         if user:
-            user.last_claim_at = func.now()
+            user.last_claim_at = datetime.now()
             user.last_claim_success = 1 if success else 0
             user.total_success = (user.total_success or 0) + (1 if success else 0)
             user.total_failed = (user.total_failed or 0) + (0 if success else 1)
