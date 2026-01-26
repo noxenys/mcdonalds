@@ -147,16 +147,31 @@ def build_telegraph_nodes_from_text(text: str, title: str) -> list:
 def build_today_telegraph_nodes(text: str, calendar_raw) -> list:
     nodes = []
     nodes.append({"tag": "h3", "children": ["今日推荐"]})
-    summary_lines = []
+    
+    # Process summary text (lines interspersed with images if any)
     for line in text.splitlines():
-        l = clean_markdown(line)
-        if not l:
+        line = line.strip()
+        if not line:
             continue
-        summary_lines.append(l)
-        if len(summary_lines) >= 12:
-            break
-    for l in summary_lines:
-        nodes.append({"tag": "p", "children": [l]})
+            
+        # Extract images from this line
+        imgs = IMG_URL_RE.findall(line)
+        
+        # Clean text by removing image tags
+        text_content = re.sub(r"<img[^>]+>", "", line)
+        cleaned_text = clean_markdown(text_content)
+        
+        # If there is text, add it first
+        if cleaned_text and not cleaned_text.startswith("http"):
+             # Remove markdown headers
+            cleaned_text = re.sub(r"^#+\s*", "", cleaned_text)
+            if cleaned_text:
+                nodes.append({"tag": "p", "children": [cleaned_text]})
+        
+        # Then add images found in this line
+        if imgs:
+            for url in imgs:
+                nodes.append({"tag": "figure", "children": [{"tag": "img", "attrs": {"src": url}}]})
 
     items = []
     if isinstance(calendar_raw, list):
@@ -165,39 +180,27 @@ def build_today_telegraph_nodes(text: str, calendar_raw) -> list:
         candidates = calendar_raw.get("items") or calendar_raw.get("campaigns") or calendar_raw.get("data") or calendar_raw.get("list")
         if isinstance(candidates, list):
             items = [item for item in candidates if isinstance(item, dict)]
-    elif isinstance(calendar_raw, str):
-        # Fallback: try to find images in the raw string using regex
-        imgs = IMG_URL_RE.findall(calendar_raw)
-        # Also check the summary text
-        imgs += IMG_URL_RE.findall(text)
-        # Deduplicate preserving order
-        seen = set()
-        unique_imgs = []
-        for img in imgs:
-            if img not in seen:
-                seen.add(img)
-                unique_imgs.append(img)
-        
-        # Create dummy items for images
-        for img in unique_imgs:
-            items.append({"image": img, "title": "活动详情图", "content": ""})
-
-    featured = []
 
     featured = []
     for item in items:
         image_url = item.get("image") or item.get("imageUrl") or item.get("img")
         if image_url:
             featured.append(item)
-        if len(featured) >= 2:
+        if len(featured) >= 5: # Increase limit to show more activities
             break
+
+    if featured:
+        nodes.append({"tag": "hr"})
+        nodes.append({"tag": "h4", "children": ["📅 精选活动详情"]})
 
     for item in featured:
         title = clean_markdown(item.get("title") or item.get("name") or "精选活动")
         image_url = item.get("image") or item.get("imageUrl") or item.get("img")
+        
         nodes.append({"tag": "hr"})
         nodes.append({"tag": "h3", "children": [title]})
         
+        # Text first
         content = item.get("content") or item.get("desc")
         if content:
             nodes.append({"tag": "p", "children": [{"tag": "b", "children": ["活动详情:"]}]})
@@ -207,6 +210,7 @@ def build_today_telegraph_nodes(text: str, calendar_raw) -> list:
                     continue
                 nodes.append({"tag": "p", "children": [l]})
         
+        # Then Image
         if image_url:
             nodes.append({"tag": "figure", "children": [
                 {"tag": "img", "attrs": {"src": image_url}},
