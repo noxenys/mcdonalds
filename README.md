@@ -97,6 +97,23 @@ docker-compose up -d
 
 ---
 
+## 💻 本地开发/运行 (Python)
+
+如果你不使用 Docker，也可以直接运行 Python 脚本：
+
+1. **环境准备**：确保安装 Python 3.10+。
+2. **安装依赖**：
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **配置环境变量**：参照上方环境变量表进行设置（推荐创建 `.env` 文件）。
+4. **启动**：
+   ```bash
+   python bot.py
+   ```
+
+---
+
 ## ☁️ 场景三：PaaS 部署 (Zeabur/Render)
 
 本仓库针对 Zeabur 等 PaaS 平台进行了优化。
@@ -207,6 +224,7 @@ Bot 会在以下时间自动为你服务：
 | :--- | :--- | :--- |
 | `TG_BOT_TOKEN` | ✅ | Telegram Bot Token (Bot 模式必填) |
 | `MCD_MCP_TOKEN` | ❌ | 麦当劳 Token (Actions 模式必填；Bot 模式选填，填了会自动绑定给 Owner) |
+| `MCD_TOKEN_SECRET` | ❌ | Token 加密密钥（开启后将加密保存 Token；务必长期固定，否则已加密 Token 无法解密） |
 | `TG_CHAT_ID` | ❌ | Owner 的 Telegram Chat ID (用于自动绑定 Owner Token) |
 | `DATABASE_URL` | ❌ | PostgreSQL 数据库连接串 (例如 `postgres://...`)，配置此项后将不再使用 SQLite，适合 Koyeb 等无持久化存储的平台。 |
 | `DB_PATH` | ❌ | SQLite 数据库路径，默认 `users.db`。Zeabur/Northflank 请设为 `/app/data/users.db` |
@@ -215,11 +233,22 @@ Bot 会在以下时间自动为你服务：
 | `FEISHU_WEBHOOK` | ❌ | 飞书 Webhook (Actions 模式用) |
 | `SERVERCHAN_SENDKEY` | ❌ | Server酱 SendKey (Actions 模式用) |
 
+### 🔐 安全说明 (MCD_TOKEN_SECRET)
+
+配置 `MCD_TOKEN_SECRET` 后，系统会对存储在数据库中的 Token 进行加密保护：
+- **加密机制**：使用 SHA256(Secret) 作为密钥，对 Token 进行 XOR 运算并 Base64 编码。
+- **数据形态**：数据库中存储的 Token 将以 `enc:` 开头。
+- **⚠️ 重要警告**：
+  - 务必长期固定使用同一个 Secret。
+  - **如果更改或丢失 Secret，所有已存储的加密 Token 将无法解密，导致无法领券。**
+  - 如需轮换密钥，必须先清空数据库或手动迁移数据。
+
 ### ⚠️ 注意事项
 
 1. **Token 过期**：麦当劳 Token 可能会过期。如果过期，Bot 会在每天的推送中提示你 `Token invalid`，并自动暂停该账号的每日自动领券以减少无效请求。此时请重新发送新 Token 给 Bot，或在更新 Token 后使用 `/autoclaim on` 重新开启自动领券。
 2. **时区问题**：程序默认设定每天 10:30 运行。Docker 镜像已内置 `Asia/Shanghai` 时区，确保你领券是在白天而不是半夜。
 3. **隐私安全**：Bot 的数据库存储了用户的 Token。请确保你的数据库文件（`users.db`）安全，不要分享给他人。
+4. **加密密钥**：如果配置了 `MCD_TOKEN_SECRET`，请长期固定该值；更改或丢失会导致已加密 Token 无法解密。
 
 ---
 

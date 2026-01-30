@@ -578,14 +578,15 @@ if __name__ == "__main__":
     # Check if loop mode is enabled
     if len(sys.argv) > 1 and sys.argv[1] == "--loop":
         print("Starting in loop mode. Will run daily at 10:30 AM.")
-        # Schedule the job every day at 10:30 AM
-        schedule.every().day.at("10:30").do(job)
-        
         # Also run immediately on startup
         job()
-        
+        last_run_date = None
         while True:
-            schedule.run_pending()
-            time.sleep(60)
+            cst_now = get_cst_now()
+            if cst_now.hour == 10 and cst_now.minute == 30:
+                if last_run_date != cst_now.date():
+                    job()
+                    last_run_date = cst_now.date()
+            time.sleep(30)
     else:
         asyncio.run(main())

@@ -183,7 +183,6 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
     # Simpler to make now naive (stripping tzinfo) since we manually adjusted to CST.
     now = now.replace(tzinfo=None)
     
-    threshold_date = now + timedelta(days=days_threshold)
     
     # 解析优惠券文本，按行或按段落分割
     lines = coupons_text.splitlines()

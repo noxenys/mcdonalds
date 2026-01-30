@@ -2,6 +2,8 @@ import sys
 import subprocess
 import importlib
 import os
+import base64
+import hashlib
 
 # Runtime Dependency Self-Check (Hotfix)
 def check_and_install_packages():
@@ -39,7 +41,7 @@ from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
-from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message
+from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message, reorder_calendar_sections
 from coupon_utils import get_cst_now, clean_markdown_text
 
 async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: int = 3500):
@@ -273,6 +275,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def _get_token_secret_bytes():
+    secret = os.getenv("MCD_TOKEN_SECRET", "").strip()
+    if not secret:
+        return None
+    return hashlib.sha256(secret.encode("utf-8")).digest()
+
+def _xor_bytes(data: bytes, key: bytes) -> bytes:
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+def _encode_token(token: str) -> str:
+    if not token:
+        return token
+    key = _get_token_secret_bytes()
+    if not key:
+        return token
+    try:
+        raw = token.encode("utf-8")
+        enc = _xor_bytes(raw, key)
+        return "enc:" + base64.urlsafe_b64encode(enc).decode("ascii")
+    except Exception as e:
+        logger.error(f"Failed to encode token: {e}")
+        return token
+
+def _decode_token(token: str) -> str:
+    if not token:
+        return token
+    if not isinstance(token, str):
+        token = str(token)
+    if not token.startswith("enc:"):
+        return token
+    key = _get_token_secret_bytes()
+    if not key:
+        logger.error("Encrypted token detected but MCD_TOKEN_SECRET is not set.")
+        return None
+    try:
+        data = base64.urlsafe_b64decode(token[4:])
+        raw = _xor_bytes(data, key)
+        return raw.decode("utf-8")
+    except Exception as e:
+        logger.error(f"Failed to decode token: {e}")
+        return None
+
 async def safe_reply_text(update: Update, text: str, **kwargs):
     for _ in range(3):
         try:
@@ -435,7 +479,7 @@ def get_active_account(user_id):
     try:
         account = session.query(Account).filter(Account.user_id == user_id, Account.is_active == 1).first()
         if account:
-            return (account.name, account.mcp_token)
+            return (account.name, _decode_token(account.mcp_token))
         return None
     finally:
         session.close()
@@ -444,7 +488,7 @@ def get_accounts(user_id):
     session = get_db()
     try:
         accounts = session.query(Account).filter(Account.user_id == user_id).all()
-        return [(acc.name, acc.mcp_token, acc.is_active) for acc in accounts]
+        return [(acc.name, _decode_token(acc.mcp_token), acc.is_active) for acc in accounts]
     finally:
         session.close()
 
@@ -452,8 +496,9 @@ def upsert_account(user_id, name, token, set_active):
     session = get_db()
     try:
         account = session.query(Account).filter(Account.user_id == user_id, Account.name == name).first()
+        stored_token = _encode_token(token)
         if account:
-            account.mcp_token = token
+            account.mcp_token = stored_token
             if set_active:
                 # Deactivate others
                 session.query(Account).filter(Account.user_id == user_id).update({"is_active": 0})
@@ -461,7 +506,7 @@ def upsert_account(user_id, name, token, set_active):
         else:
             if set_active:
                 session.query(Account).filter(Account.user_id == user_id).update({"is_active": 0})
-            account = Account(user_id=user_id, name=name, mcp_token=token, is_active=1 if set_active else 0)
+            account = Account(user_id=user_id, name=name, mcp_token=stored_token, is_active=1 if set_active else 0)
             session.add(account)
         session.commit()
     except Exception as e:
@@ -490,7 +535,7 @@ def get_user_token(user_id):
     session = get_db()
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
-        return user.mcp_token if user else None
+        return _decode_token(user.mcp_token) if user else None
     finally:
         session.close()
 
@@ -498,12 +543,13 @@ def save_user_token(user_id, username, token):
     session = get_db()
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
+        stored_token = _encode_token(token)
         if user:
             user.username = username
-            user.mcp_token = token
+            user.mcp_token = stored_token
             # Ensure auto_claim is enabled if it was null (though default handles it)
         else:
-            user = User(user_id=user_id, username=username, mcp_token=token, auto_claim_enabled=1)
+            user = User(user_id=user_id, username=username, mcp_token=stored_token, auto_claim_enabled=1)
             session.add(user)
         session.commit()
         
@@ -532,7 +578,7 @@ def get_all_users():
     try:
         # auto_claim_enabled IS NULL OR auto_claim_enabled=1
         users = session.query(User).filter((User.auto_claim_enabled == None) | (User.auto_claim_enabled == 1)).all()
-        return [(u.user_id, u.mcp_token, u.claim_report_enabled) for u in users]
+        return [(u.user_id, _decode_token(u.mcp_token), u.claim_report_enabled) for u in users]
     finally:
         session.close()
 
@@ -803,6 +849,7 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         if isinstance(text_result, str):
             text_result = strip_mcp_header(text_result)
+            text_result = reorder_calendar_sections(text_result)
 
         if isinstance(text_result, str) and is_mcp_error_message(text_result):
             await update.message.reply_text("今天麦当劳 MCP 服务似乎出问题了，我暂时查不到活动日历，可以稍后再试一次 /calendar。")
@@ -1234,6 +1281,9 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not target:
             await update.message.reply_text(f"❌ 未找到名为 `{name}` 的账号。", parse_mode='Markdown')
             return
+        if not target[1]:
+            await update.message.reply_text("⚠️ 该账号的 Token 无法读取（可能启用了 MCD_TOKEN_SECRET 但当前未设置）。请先配置正确的密钥。")
+            return
         set_active_account(user_id, name)
         save_user_token(user_id, update.effective_user.username, target[1])
         await update.message.reply_text(f"✅ 已切换到账号 `{name}`。", parse_mode='Markdown')
@@ -1386,7 +1436,7 @@ async def process_user_claim(application: Application, user_id, token, report_en
                     quote = random.choice(MCD_QUOTES)
                     message += f"\n\n🍟 {quote}"
 
-                await safe_bot_send_message(application.bot, user_id, message, parse_mode='Markdown')
+                await safe_bot_send_message(application.bot, user_id, message)
         except Exception as e:
             logger.error(f"Failed to auto-claim for user {user_id}: {e}")
 
@@ -1399,6 +1449,8 @@ async def scheduled_job(application: Application):
     tasks = []
     
     for user_id, token, report_enabled in users:
+        if not token:
+            continue
         tasks.append(process_user_claim(application, user_id, token, report_enabled, semaphore))
     
     await asyncio.gather(*tasks)
@@ -1627,16 +1679,25 @@ def run_scheduler(application, loop):
     def job_wrapper_dinner():
         asyncio.run_coroutine_threadsafe(scheduled_meal_reminder(application, "dinner"), loop)
 
-    # Schedule daily tasks
-    schedule.every().day.at("10:30").do(job_wrapper_claim)   # 自动领券
-    schedule.every().day.at("10:35").do(job_wrapper_today)   # 今日推荐
-    schedule.every().day.at("11:30").do(job_wrapper_lunch)   # 午餐提醒
-    schedule.every().day.at("17:30").do(job_wrapper_dinner)  # 晚餐提醒
-    schedule.every().day.at("20:00").do(job_wrapper_expiry)  # 过期提醒
-    
+    # Schedule daily tasks (use CST time to avoid server timezone drift)
+    schedule_map = {
+        "10:30": job_wrapper_claim,   # 自动领券
+        "10:35": job_wrapper_today,   # 今日推荐
+        "11:30": job_wrapper_lunch,   # 午餐提醒
+        "17:30": job_wrapper_dinner,  # 晚餐提醒
+        "20:00": job_wrapper_expiry,  # 过期提醒
+    }
+    last_run = {}
+
     while True:
-        schedule.run_pending()
-        time.sleep(60)
+        cst_now = get_cst_now()
+        hhmm = cst_now.strftime("%H:%M")
+        if hhmm in schedule_map:
+            last_date = last_run.get(hhmm)
+            if last_date != cst_now.date():
+                schedule_map[hhmm]()
+                last_run[hhmm] = cst_now.date()
+        time.sleep(30)
 
 # Keep-alive web server for PaaS (Koyeb/Render/HF Spaces)
 app = Flask(__name__)
