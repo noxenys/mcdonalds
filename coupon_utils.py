@@ -18,6 +18,110 @@ def clean_markdown_text(text: str) -> str:
     # Remove Markdown bold/italic/code markers and backslashes
     return text.replace("**", "").replace("__", "").replace("*", "").replace("`", "").replace("\\", "").strip()
 
+# Coupon parsing helpers
+_NAME_PATTERNS = [
+    re.compile(r'(?:\u4f18\u60e0\u5238\u6807\u9898|\u4f18\u60e0\u5238\u540d\u79f0|\u4f18\u60e0\u540d\u79f0|\u6807\u9898|\u540d\u79f0|\u5238\u540d|\u5546\u54c1\u540d\u79f0|title|name)\s*[:\uff1a]\s*(.+)', re.I),
+]
+_DETAIL_PATTERN = re.compile(r'(?:\u5185\u5bb9|\u63cf\u8ff0|\u9002\u7528|\u5546\u54c1|\u5957\u9910|\u8bf4\u660e)\s*[:\uff1a]\s*(.+)')
+_META_LABELS = [
+    "\u6709\u6548\u671f", "\u72b6\u6001", "\u5238\u7801", "\u5238\u53f7", "\u4f7f\u7528\u89c4\u5219",
+    "\u56fe\u7247", "\u94fe\u63a5", "\u4ef7\u683c", "\u7528\u5238\u4ef7\u683c", "coupon", "code"
+]
+_GENERIC_NAMES = {
+    "\u4f18\u60e0", "\u4f18\u60e0\u5238", "\u4f18\u60e0\u5238\u6807\u9898", "\u4f18\u60e0\u5238\u540d\u79f0", "\u5238"
+}
+
+
+def _normalize_coupon_name(name: str) -> str:
+    name = clean_markdown_text(name)
+    name = re.sub(r'^[\s\-\u2022\*]+', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
+
+
+def _is_metadata_label(text: str) -> bool:
+    if not text:
+        return True
+    lowered = text.lower()
+    for kw in _META_LABELS:
+        if kw.lower() in lowered:
+            return True
+    return False
+
+
+def _is_generic_coupon_name(name: str) -> bool:
+    if not name:
+        return True
+    if name in _GENERIC_NAMES:
+        return True
+    lowered = name.lower()
+    return lowered in {"coupon", "coupons"}
+
+
+def _extract_coupon_name_from_line(line: str) -> str:
+    if not line:
+        return ""
+    clean_line = clean_markdown_text(line)
+    for pat in _NAME_PATTERNS:
+        match = pat.search(clean_line)
+        if match:
+            name = _normalize_coupon_name(match.group(1))
+            if name and not _is_metadata_label(name):
+                return name
+    stripped = re.sub(r'^[\s\-\u2022\*]+', '', clean_line)
+    if stripped.startswith("##"):
+        name = _normalize_coupon_name(stripped.lstrip("#").strip())
+        if name and not _is_metadata_label(name):
+            return name
+    match = re.match(r'^([^:\uff1a]{2,80})\s*[:\uff1a]', stripped)
+    if match:
+        name = _normalize_coupon_name(match.group(1))
+        if name and not _is_metadata_label(name):
+            return name
+    # Fallback: plain bullet line without colon
+    if line.lstrip().startswith(("-", "*", "\u2022")):
+        candidate = stripped
+        if candidate and len(candidate) <= 80 and not _is_metadata_label(candidate):
+            if not re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', candidate):
+                return candidate
+    return ""
+
+def _extract_detail_from_line(line: str) -> str:
+    if not line:
+        return ""
+    clean_line = clean_markdown_text(line)
+    if ":" in clean_line:
+        _, detail = clean_line.split(":", 1)
+    elif "\uff1a" in clean_line:
+        _, detail = clean_line.split("\uff1a", 1)
+    else:
+        return ""
+    detail = detail.strip()
+    detail = re.split(r'(?:\u6709\u6548\u671f|\u6709\u6548\u81f3|\(|\uff08)', detail)[0].strip()
+    if len(detail) < 2:
+        return ""
+    return detail
+
+def _extract_descriptive_detail(line: str) -> str:
+    if not line:
+        return ""
+    clean_line = clean_markdown_text(line)
+    match = _DETAIL_PATTERN.search(clean_line)
+    if not match:
+        return ""
+    detail = match.group(1).strip()
+    detail = re.split(r'(?:\u6709\u6548\u671f|\u6709\u6548\u81f3|\(|\uff08)', detail)[0].strip()
+    if len(detail) < 2:
+        return ""
+    return detail
+
+
+def _extract_coupon_code(line: str) -> str:
+    if not line:
+        return ""
+    match = re.search(r'(?:couponCode|couponId|\u5238\u7801|\u5238\u53f7|\u5151\u6362\u7801)\s*[:\uff1a]\s*([A-Za-z0-9\-]{3,})', line, re.I)
+    return match.group(1) if match else ""
+
 def parse_expiry_date(text: str) -> Optional[datetime]:
     """
     从优惠券文本中提取有效期
@@ -93,28 +197,23 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
                 current_coupon = {}
             continue
         
-        title_match = re.search(r'(优惠券标题|标题|名称)[：:]\s*(.+)', line)
-        if title_match:
-            title = title_match.group(2).strip()
+        name_candidate = _extract_coupon_name_from_line(line)
+        if name_candidate:
             if current_coupon:
                 expiring_coupons.append(current_coupon)
-            current_coupon = {'name': title, 'raw_text': line}
+            current_coupon = {'name': name_candidate, 'raw_text': line}
         else:
-            is_metadata = any(keyword in line for keyword in ['有效期', '状态', 'coupon', '图片', 'http', '券码', '使用规则'])
-            if (line.startswith('-') or line.startswith('•') or line.startswith('##')) and not is_metadata:
-                if current_coupon:
-                    expiring_coupons.append(current_coupon)
-                
-                title = re.sub(r'^[-•#\s]+', '', line).strip()
-                
-                if title.startswith('优惠券标题：'):
-                    title = title.replace('优惠券标题：', '').strip()
-                elif title.startswith('标题：'):
-                    title = title.replace('标题：', '').strip()
-                    
-                current_coupon = {'name': title, 'raw_text': line}
-        
-        # 检测有效期
+            pass
+
+        code = _extract_coupon_code(line)
+        if code and current_coupon:
+            current_coupon['code'] = code
+
+        if current_coupon and _is_generic_coupon_name(current_coupon.get('name', '')):
+            detail = _extract_descriptive_detail(line) or _extract_detail_from_line(line)
+            if detail and detail not in current_coupon['name']:
+                current_coupon['name'] = f"{current_coupon['name']} {detail}".strip()
+
         expiry = parse_expiry_date(line)
         if expiry:
             if current_coupon:
@@ -240,13 +339,20 @@ def format_expiry_reminder(expiring_coupons: List[Dict]) -> str:
         else:
             urgency = f"🟡 {days_left}天后过期"
         
-        name = coupon.get('name') or "未识别券名"
+        name = coupon.get('name') or "\u672a\u8bc6\u522b\u5238\u540d"
+        code = coupon.get('code')
+        code_hint = ""
+        if code:
+            if len(code) > 4:
+                code_hint = f"(\u5238\u7801\u5c3e\u53f7{code[-4:]})"
+            else:
+                code_hint = f"(\u5238\u7801{code})"
         expiry_dt = coupon.get('expiry_date')
         if expiry_dt:
             expiry_str = expiry_dt.strftime('%Y-%m-%d')
-            msg_parts.append(f"{urgency} {name}（有效期至 {expiry_str}）")
+            msg_parts.append(f"{urgency} {name}{code_hint}(\u6709\u6548\u671f\u81f3 {expiry_str})")
         else:
-            msg_parts.append(f"{urgency} {name}")
+            msg_parts.append(f"{urgency} {name}{code_hint}")
     
     msg_parts.extend(["", "💡 记得及时使用，不要浪费哦~"])
     

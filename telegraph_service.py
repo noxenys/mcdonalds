@@ -1,6 +1,7 @@
 import httpx
 import json
 import os
+import re
 from tenacity import retry, stop_after_attempt, wait_exponential
 from coupon_utils import get_cst_now, clean_markdown_text
 
@@ -89,6 +90,32 @@ class TelegraphService:
         return clean_markdown_text(text)
 
     @staticmethod
+    def _extract_date_str(value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            value = str(value)
+        match = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', value)
+        if not match:
+            return None
+        year, month, day = match.groups()
+        return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+
+    @staticmethod
+    def sort_calendar_items(items):
+        if not items:
+            return items
+
+        def key(item):
+            start = item.get("start") or item.get("startDate") or item.get("date") or item.get("begin")
+            end = item.get("end") or item.get("endDate") or item.get("finish")
+            date_str = TelegraphService._extract_date_str(start) or TelegraphService._extract_date_str(end)
+            has_date = 1 if date_str else 0
+            return (has_date, date_str or "")
+
+        return sorted(items, key=key, reverse=True)
+
+    @staticmethod
     def format_calendar_to_nodes(calendar_data):
         """
         Converts calendar data (list of dicts) to Telegraph Nodes.
@@ -110,7 +137,8 @@ class TelegraphService:
         nodes.append({"tag": "p", "children": ["麦当劳近期活动一览："]})
         nodes.append({"tag": "hr"})
 
-        for item in calendar_data:
+        calendar_items = TelegraphService.sort_calendar_items(calendar_data)
+        for item in calendar_items:
             # Item Title
             title = TelegraphService._clean_text(item.get("title", "未知活动"))
             nodes.append({"tag": "h3", "children": [title]})

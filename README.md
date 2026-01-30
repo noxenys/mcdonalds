@@ -74,7 +74,7 @@
 version: '3.8'
 services:
   mcdonalds-bot:
-    image: ghcr.io/noxenys/mcdonalds:latest
+    image: ghcr.io/noxenys/mcdonalds:latest # 也可以指定版本号，如 :2.0.11
     container_name: mcd_bot
     restart: always
     environment:

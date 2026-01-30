@@ -173,6 +173,20 @@ def build_today_telegraph_nodes(text: str, calendar_raw) -> list:
             for url in imgs:
                 nodes.append({"tag": "figure", "children": [{"tag": "img", "attrs": {"src": url}}]})
 
+    def _parse_date(value):
+        if not value:
+            return None
+        if not isinstance(value, str):
+            value = str(value)
+        m = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', value)
+        if not m:
+            return None
+        year, month, day = m.groups()
+        try:
+            return datetime(int(year), int(month), int(day)).date()
+        except ValueError:
+            return None
+
     items = []
     if isinstance(calendar_raw, list):
         items = [item for item in calendar_raw if isinstance(item, dict)]
@@ -180,6 +194,27 @@ def build_today_telegraph_nodes(text: str, calendar_raw) -> list:
         candidates = calendar_raw.get("items") or calendar_raw.get("campaigns") or calendar_raw.get("data") or calendar_raw.get("list")
         if isinstance(candidates, list):
             items = [item for item in candidates if isinstance(item, dict)]
+
+    items = TelegraphService.sort_calendar_items(items) if items else []
+    if items:
+        today_date = get_cst_now().date()
+        filtered = []
+        for item in items:
+            start = _parse_date(item.get("start") or item.get("startDate") or item.get("date") or item.get("begin"))
+            end = _parse_date(item.get("end") or item.get("endDate") or item.get("finish"))
+            if start and end:
+                if start <= today_date <= end:
+                    filtered.append(item)
+            elif start:
+                if start == today_date:
+                    filtered.append(item)
+            elif end:
+                if end == today_date:
+                    filtered.append(item)
+            else:
+                filtered.append(item)
+        items = filtered
+
 
     featured = []
     for item in items:
@@ -738,6 +773,7 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if isinstance(raw_result, list):
             items = [item for item in raw_result if isinstance(item, dict)]
             if items:
+                items = TelegraphService.sort_calendar_items(items)
                 calendar_nodes = telegraph_service.format_calendar_to_nodes(items)
                 titles = []
                 for item in items:
@@ -751,6 +787,7 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if isinstance(candidates, list):
                 items = [item for item in candidates if isinstance(item, dict)]
                 if items:
+                    items = TelegraphService.sort_calendar_items(items)
                     calendar_nodes = telegraph_service.format_calendar_to_nodes(items)
                     titles = []
                     for item in items:

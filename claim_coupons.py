@@ -324,6 +324,92 @@ def strip_calendar_today_header(text: str) -> str:
         cleaned.append(line)
     return "\n".join(cleaned)
 
+def reorder_calendar_sections(text: str) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    prefix = []
+    sections = []
+    current = None
+
+    def is_header(line: str) -> bool:
+        l = line.strip()
+        if not l:
+            return False
+        if "昨日" not in l and "今日" not in l and "今天" not in l:
+            return False
+        return l.startswith("#") or l.startswith("【") or l.startswith("昨日") or l.startswith("今日") or l.startswith("今天")
+
+    for line in lines:
+        if is_header(line):
+            if current:
+                sections.append(current)
+            current = [line]
+        else:
+            if current is None:
+                prefix.append(line)
+            else:
+                current.append(line)
+
+    if current:
+        sections.append(current)
+
+    if not sections:
+        return text
+
+    idx_today = None
+    idx_yesterday = None
+    for i, sec in enumerate(sections):
+        header = sec[0].strip()
+        if idx_today is None and ("今日" in header or "今天" in header):
+            idx_today = i
+        if idx_yesterday is None and "昨日" in header:
+            idx_yesterday = i
+
+    if idx_today is None or idx_yesterday is None:
+        return text
+
+    if idx_yesterday < idx_today:
+        new_sections = []
+        for i, sec in enumerate(sections):
+            if i == idx_yesterday:
+                new_sections.append(sections[idx_today])
+            elif i == idx_today:
+                new_sections.append(sections[idx_yesterday])
+            else:
+                new_sections.append(sec)
+        merged = prefix + [line for sec in new_sections for line in sec]
+        return "\n".join(merged)
+
+    return text
+
+def remove_yesterday_section(text: str) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    cleaned = []
+    skipping = False
+
+    def is_header(line: str) -> bool:
+        l = line.strip()
+        if not l:
+            return False
+        if l.startswith(("#", "【", "昨日", "昨天", "今日", "今天", "明日", "明天")):
+            return True
+        return False
+
+    for line in lines:
+        stripped = line.strip()
+        if is_header(line):
+            if "昨日" in stripped or "昨天" in stripped:
+                skipping = True
+                continue
+            skipping = False
+        if skipping:
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
 async def claim_for_token(token, enable_push=True):
     return await call_mcp_tool(token, "auto-bind-coupons", enable_push=enable_push)
 
@@ -443,6 +529,8 @@ async def get_today_recommendation(token):
             cal_cleaned = strip_calendar_today_header(calendar_text)
             # Remove raw Markdown bold syntax like **Title** and trailing backslashes
             cal_cleaned = cal_cleaned.replace("**", "").replace("\\", "")
+            cal_cleaned = reorder_calendar_sections(cal_cleaned)
+            cal_cleaned = remove_yesterday_section(cal_cleaned)
             lines.append(cal_cleaned.strip())
     
     lines.append("")
