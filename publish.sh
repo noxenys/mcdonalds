@@ -2,27 +2,8 @@
 
 # Configuration
 IMAGE_NAME="ghcr.io/noxenys/mcdonalds"
-TIMESTAMP=$(date +"%Y%m%d_%H%M")
-
-# Check if version argument is provided
-if [ -n "$1" ]; then
-  VERSION="$1"
-else
-  # No argument provided, prompt user
-  echo -e "${CYAN}Input Version (e.g., 2.0.1)${NC}"
-  echo -e "Press ${YELLOW}ENTER${NC} to use timestamp version: ${YELLOW}v${TIMESTAMP}${NC}"
-  read -p "Version: " INPUT_VERSION
-  
-  if [ -n "$INPUT_VERSION" ]; then
-    VERSION="$INPUT_VERSION"
-  else
-    VERSION="v${TIMESTAMP}"
-  fi
-fi
-
-TAG_LATEST="${IMAGE_NAME}:latest"
-TAG_VERSION="${IMAGE_NAME}:${VERSION}"
 COMPOSE_FILE="docker-compose.yml"
+TIMESTAMP=$(date +"%Y%m%d_%H%M")
 
 # Colors
 GREEN='\033[0;32m'
@@ -30,6 +11,50 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+get_next_semver() {
+  local line version major minor patch
+  line=$(grep -E "image: ${IMAGE_NAME}:" "$COMPOSE_FILE" | head -n 1)
+  if [[ "$line" =~ ${IMAGE_NAME}:([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+    patch=$((patch + 1))
+    echo "${major}.${minor}.${patch}"
+    return 0
+  fi
+  return 1
+}
+
+# Check if version argument is provided
+if [ -n "$1" ]; then
+  if [ "$1" = "auto" ] || [ "$1" = "--auto" ]; then
+    if ! VERSION=$(get_next_semver); then
+      echo -e "${YELLOW}Auto bump failed. Falling back to timestamp version.${NC}"
+      VERSION="v${TIMESTAMP}"
+    fi
+  else
+    VERSION="$1"
+  fi
+else
+  if VERSION=$(get_next_semver); then
+    echo -e "${CYAN}Auto bump version: ${YELLOW}${VERSION}${NC}"
+  else
+    # No version detected, prompt user
+    echo -e "${CYAN}Input Version (e.g., 2.0.1)${NC}"
+    echo -e "Press ${YELLOW}ENTER${NC} to use timestamp version: ${YELLOW}v${TIMESTAMP}${NC}"
+    read -p "Version: " INPUT_VERSION
+    
+    if [ -n "$INPUT_VERSION" ]; then
+      VERSION="$INPUT_VERSION"
+    else
+      VERSION="v${TIMESTAMP}"
+    fi
+  fi
+fi
+
+TAG_LATEST="${IMAGE_NAME}:latest"
+TAG_VERSION="${IMAGE_NAME}:${VERSION}"
 
 echo -e "${CYAN}🚀 Starting Automated Publish Process...${NC}"
 echo -e "   Target Version: ${YELLOW}${VERSION}${NC}"

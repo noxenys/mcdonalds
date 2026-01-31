@@ -140,6 +140,7 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
     从优惠券文本中提取有效期
     支持格式：2026-01-25、2026/01/25、01月25日等
     """
+    now = get_cst_now().replace(tzinfo=None)
     # 尝试匹配 YYYY-MM-DD 或 YYYY/MM/DD
     match = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', text)
     if match:
@@ -154,7 +155,6 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
     if match:
         month, day = match.groups()
         try:
-            now = get_cst_now()
             year = now.year
             date = datetime(year, int(month), int(day))
             # 如果日期已过，可能是明年的
@@ -178,7 +178,6 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
     if match:
         month, day = match.groups()
         try:
-            now = get_cst_now()
             year = now.year
             date = datetime(year, int(month), int(day))
             if date < now:
