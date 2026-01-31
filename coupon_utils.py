@@ -30,10 +30,15 @@ _META_LABELS = [
 _GENERIC_NAMES = {
     "\u4f18\u60e0", "\u4f18\u60e0\u5238", "\u4f18\u60e0\u5238\u6807\u9898", "\u4f18\u60e0\u5238\u540d\u79f0", "\u5238"
 }
+_PRICE_ONLY_RE = re.compile(r'^(?:\u4f18\u60e0|\u7279\u60e0)?\s*¥\s*\d+(?:\.\d+)?$', re.I)
 
 
 def _normalize_coupon_name(name: str) -> str:
     name = clean_markdown_text(name)
+    # Remove trailing expiry info inside parentheses
+    name = re.sub(r'[\(（].*?有效.*?[\)）]', '', name).strip()
+    if "有效期" in name:
+        name = re.split(r'有效期.*', name)[0].strip()
     name = re.sub(r'^[\s\-\u2022\*]+', '', name)
     name = re.sub(r'\s+', ' ', name).strip()
     return name
@@ -55,6 +60,9 @@ def _is_generic_coupon_name(name: str) -> bool:
     if name in _GENERIC_NAMES:
         return True
     lowered = name.lower()
+    compact = re.sub(r'\s+', '', name)
+    if _PRICE_ONLY_RE.match(compact):
+        return True
     return lowered in {"coupon", "coupons"}
 
 
@@ -62,6 +70,7 @@ def _extract_coupon_name_from_line(line: str) -> str:
     if not line:
         return ""
     clean_line = clean_markdown_text(line)
+    price_like = re.search(r'¥\s*\d+(\.\d+)?', clean_line)
     for pat in _NAME_PATTERNS:
         match = pat.search(clean_line)
         if match:
@@ -69,6 +78,10 @@ def _extract_coupon_name_from_line(line: str) -> str:
             if name and not _is_metadata_label(name):
                 return name
     stripped = re.sub(r'^[\s\-\u2022\*]+', '', clean_line)
+    if price_like and len(stripped) <= 80 and not _is_metadata_label(stripped):
+        stripped = re.sub(r'[\(（].*?有效.*?[\)）]', '', stripped).strip()
+        if stripped:
+            return _normalize_coupon_name(stripped)
     if stripped.startswith("##"):
         name = _normalize_coupon_name(stripped.lstrip("#").strip())
         if name and not _is_metadata_label(name):
@@ -137,7 +150,7 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
             pass
     
     # 尝试匹配 MM月DD日
-    match = re.search(r'(\d{1,2})月(\d{1,2})日', text)
+    match = re.search(r'(\d{1,2})月\s*(\d{1,2})日', text)
     if match:
         month, day = match.groups()
         try:
@@ -152,11 +165,25 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
             pass
     
     # 尝试匹配 "有效期至..."
-    match = re.search(r'有效期[：:至到]*\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2})', text)
+    match = re.search(r'(?:有效期|有效期至|有效期到|有效期为|有效期截止)[^\d]*(\d{4})[-/](\d{1,2})[-/](\d{1,2})', text)
     if match:
         year, month, day = match.groups()
         try:
             return datetime(int(year), int(month), int(day))
+        except ValueError:
+            pass
+
+    # 有效期但无年份：有效期至 01-31
+    match = re.search(r'(?:有效期|有效期至|有效期到|有效期为|有效期截止)[^\d]*(\d{1,2})[-/](\d{1,2})', text)
+    if match:
+        month, day = match.groups()
+        try:
+            now = get_cst_now()
+            year = now.year
+            date = datetime(year, int(month), int(day))
+            if date < now:
+                date = datetime(year + 1, int(month), int(day))
+            return date
         except ValueError:
             pass
     
@@ -188,10 +215,10 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
     lines = coupons_text.splitlines()
     current_coupon = {}
     
-    for line in lines:
+    for idx, line in enumerate(lines):
         line = line.strip()
         if not line:
-            if current_coupon:
+            if current_coupon and current_coupon.get('expiry_date'):
                 expiring_coupons.append(current_coupon)
                 current_coupon = {}
             continue
@@ -199,10 +226,14 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
         name_candidate = _extract_coupon_name_from_line(line)
         if name_candidate:
             if current_coupon:
-                expiring_coupons.append(current_coupon)
-            current_coupon = {'name': name_candidate, 'raw_text': line}
-        else:
-            pass
+                if current_coupon.get('expiry_date') and _is_generic_coupon_name(current_coupon.get('name', '')) and not _is_generic_coupon_name(name_candidate):
+                    current_coupon['name'] = name_candidate
+                    current_coupon['raw_text'] = line
+                else:
+                    expiring_coupons.append(current_coupon)
+                    current_coupon = {}
+            if not current_coupon:
+                current_coupon = {'name': name_candidate, 'raw_text': line}
 
         code = _extract_coupon_code(line)
         if code and current_coupon:
@@ -215,12 +246,14 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
 
         expiry = parse_expiry_date(line)
         if expiry:
-            if current_coupon:
-                current_coupon['expiry_date'] = expiry
-                current_coupon['days_left'] = (expiry - now).days
+            if not current_coupon:
+                current_coupon = {'name': name_candidate or "", 'raw_text': line}
+            current_coupon['expiry_date'] = expiry
+            current_coupon['days_left'] = (expiry - now).days
+            current_coupon['expiry_line_idx'] = idx
     
     # 添加最后一个
-    if current_coupon:
+    if current_coupon and current_coupon.get('expiry_date'):
         expiring_coupons.append(current_coupon)
     
     # 过滤：只返回即将过期的
@@ -339,19 +372,12 @@ def format_expiry_reminder(expiring_coupons: List[Dict]) -> str:
             urgency = f"🟡 {days_left}天后过期"
         
         name = coupon.get('name') or "\u672a\u8bc6\u522b\u5238\u540d"
-        code = coupon.get('code')
-        code_hint = ""
-        if code:
-            if len(code) > 4:
-                code_hint = f"(\u5238\u7801\u5c3e\u53f7{code[-4:]})"
-            else:
-                code_hint = f"(\u5238\u7801{code})"
         expiry_dt = coupon.get('expiry_date')
         if expiry_dt:
             expiry_str = expiry_dt.strftime('%Y-%m-%d')
-            msg_parts.append(f"{urgency} {name}{code_hint}(\u6709\u6548\u671f\u81f3 {expiry_str})")
+            msg_parts.append(f"{urgency} {name}(\u6709\u6548\u671f\u81f3 {expiry_str})")
         else:
-            msg_parts.append(f"{urgency} {name}{code_hint}")
+            msg_parts.append(f"{urgency} {name}")
     
     msg_parts.extend(["", "💡 记得及时使用，不要浪费哦~"])
     

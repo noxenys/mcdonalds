@@ -633,6 +633,18 @@ def update_claim_stats(user_id, success):
     finally:
         session.close()
 
+def _coerce_date(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            return None
+    return None
+
 def get_admin_summary():
     session = get_db()
     try:
@@ -1412,6 +1424,19 @@ import random
 async def process_user_claim(application: Application, user_id, token, report_enabled, semaphore):
     async with semaphore:
         try:
+            try:
+                row = get_user_stats_and_status(user_id)
+                if row:
+                    last_claim_at = row[3]
+                    last_claim_success = row[4]
+                    if last_claim_success == 1:
+                        last_date = _coerce_date(last_claim_at)
+                        if last_date == get_cst_now().date():
+                            logger.info(f"Skipping auto-claim for user {user_id}: already claimed today.")
+                            return
+            except Exception as e:
+                logger.warning(f"Failed to check last claim for user {user_id}: {e}")
+
             logger.info(f"Claiming for user {user_id}")
             result = await claim_for_token(token, enable_push=False)
             success = True

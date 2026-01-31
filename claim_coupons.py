@@ -74,6 +74,7 @@ def cleanup_for_telegram(text):
     
     # Check if this is a claim result (contains couponId and couponCode)
     is_claim_result = any("couponId" in line or "couponCode" in line for line in raw_lines)
+    img_re = re.compile(r"<img[^>]*src=[\"']([^\"']+)[\"']", re.IGNORECASE)
     
     if is_claim_result:
         # Format claim results: extract coupon name and code, hide technical details
@@ -103,23 +104,52 @@ def cleanup_for_telegram(text):
                 content = stripped[2:].strip()
                 
                 # Check for key-value pair (support both : and ：)
-                has_colon = "：" in content or ": " in content
+                has_colon = "：" in content or ": " in content or ":" in content
                 
                 if has_colon:
                     key = None
                     value = None
                     if "：" in content:
                         key, value = content.split("：", 1)
-                    else:
+                    elif ": " in content:
                         key, value = content.split(": ", 1)
+                    else:
+                        key, value = content.split(":", 1)
                         
                     key = key.strip()
                     value = value.strip()
+                    key_lower = key.lower()
+                    
+                    if "<img" in value:
+                        m = img_re.search(value)
+                        if m:
+                            current_coupon['image'] = m.group(1)
+                    
+                    if "couponcode" in key_lower or key in ["券码", "券号", "兑换码"]:
+                        current_coupon['code'] = clean_text(value)
+                        continue
+                    if "couponid" in key_lower:
+                        continue
+                    if key_lower in ["image", "img"] or key in ["图片"]:
+                        img_url = None
+                        m = img_re.search(value)
+                        if m:
+                            img_url = m.group(1)
+                        elif value.startswith("http"):
+                            img_url = value.split()[0]
+                        if img_url:
+                            current_coupon['image'] = img_url
+                        continue
                     
                     if key in ["优惠券标题", "标题", "优惠券名称", "名称"]:
                         current_coupon['name'] = clean_text(value)
                     # ignore couponId, couponCode, 图片 etc.
                 else:
+                    if "<img" in content:
+                        m = img_re.search(content)
+                        if m:
+                            current_coupon['image'] = m.group(1)
+                        continue
                     # No colon, assume it's the coupon name
                     # If we already have a name, it means we missed the end of the previous coupon
                     # or this is the start of a new one. Push the previous one.
@@ -140,7 +170,8 @@ def cleanup_for_telegram(text):
         
         # Format output
         if header_lines:
-            formatted_lines.append("### 📊 领券统计\n")
+            formatted_lines.append("🎉 领券结果")
+            formatted_lines.append("")
             for h in header_lines:
                 formatted_lines.append(h)
             formatted_lines.append("")
@@ -148,7 +179,7 @@ def cleanup_for_telegram(text):
         if parsed_coupons:
             formatted_lines.append("━━━━━━━━━━━━━━━━━━━")
             formatted_lines.append("")
-            formatted_lines.append("### ✅ 成功领取的优惠券\n")
+            formatted_lines.append("✅ 成功领取的优惠券：")
             for coupon in parsed_coupons:
                 name = coupon.get('name', '未知优惠券')
                 formatted_lines.append(f"• {name}")
