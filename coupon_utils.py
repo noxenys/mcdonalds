@@ -141,10 +141,10 @@ def parse_expiry_date(text: str) -> Optional[datetime]:
     支持格式：2026-01-25、2026/01/25、01月25日等
     """
     now = get_cst_now().replace(tzinfo=None)
-    # 尝试匹配 YYYY-MM-DD 或 YYYY/MM/DD
-    match = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', text)
-    if match:
-        year, month, day = match.groups()
+    # 尝试匹配 YYYY-MM-DD 或 YYYY/MM/DD（优先取范围中的最后一天）
+    matches = re.findall(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', text)
+    if matches:
+        year, month, day = matches[-1]
         try:
             return datetime(int(year), int(month), int(day))
         except ValueError:
@@ -214,6 +214,20 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
     lines = coupons_text.splitlines()
     current_coupon = {}
     
+    def _is_metadata_line(line: str) -> bool:
+        if not line:
+            return False
+        clean = clean_markdown_text(line).strip()
+        if not clean:
+            return False
+        check = clean
+        if check.startswith(("-", "*")):
+            check = check.lstrip("-* ").strip()
+        for prefix in ("优惠:", "优惠：", "有效期", "领取时间", "标签", "状态", "使用规则"):
+            if check.startswith(prefix):
+                return True
+        return False
+
     for idx, line in enumerate(lines):
         line = line.strip()
         if not line:
@@ -222,17 +236,24 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
                 current_coupon = {}
             continue
         
-        name_candidate = _extract_coupon_name_from_line(line)
+        name_candidate = ""
+        if not _is_metadata_line(line):
+            name_candidate = _extract_coupon_name_from_line(line)
         if name_candidate:
-            if current_coupon:
-                if current_coupon.get('expiry_date') and _is_generic_coupon_name(current_coupon.get('name', '')) and not _is_generic_coupon_name(name_candidate):
-                    current_coupon['name'] = name_candidate
-                    current_coupon['raw_text'] = line
-                else:
+            if line.lstrip().startswith("##"):
+                if current_coupon and current_coupon.get('expiry_date'):
                     expiring_coupons.append(current_coupon)
-                    current_coupon = {}
-            if not current_coupon:
                 current_coupon = {'name': name_candidate, 'raw_text': line}
+            else:
+                if current_coupon:
+                    if current_coupon.get('expiry_date'):
+                        expiring_coupons.append(current_coupon)
+                        current_coupon = {'name': name_candidate, 'raw_text': line}
+                    elif _is_generic_coupon_name(current_coupon.get('name', '')) and not _is_generic_coupon_name(name_candidate):
+                        current_coupon['name'] = name_candidate
+                        current_coupon['raw_text'] = line
+                else:
+                    current_coupon = {'name': name_candidate, 'raw_text': line}
 
         code = _extract_coupon_code(line)
         if code and current_coupon:
