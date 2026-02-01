@@ -243,6 +243,22 @@ Bot 会在以下时间自动为你服务：
   - **如果更改或丢失 Secret，所有已存储的加密 Token 将无法解密，导致无法领券。**
   - 如需轮换密钥，必须先清空数据库或手动迁移数据。
 
+### 🔄 如何更新 Fork 的仓库
+
+如果你 Fork 了本项目，想要获取最新的功能更新，可以按照以下步骤操作（无需懂 Git 命令）：
+
+1. 打开你的 GitHub 仓库页面。
+2. 在文件列表上方，你会看到一行小字：`This branch is ... commits behind noxenys:main`。
+3. 点击旁边的 **Sync fork** 按钮。
+4. 点击 **Update branch**。
+5. 搞定！你的仓库现在就是最新的了。
+
+**更新后的操作：**
+- **GitHub Actions 用户**：更新后，新的 Action 会自动使用最新代码运行。
+- **Docker 用户**：
+  - 如果使用 `image: ghcr.io/...`：请运行 `docker-compose pull` 拉取最新镜像，然后 `docker-compose up -d` 重启。
+  - 如果使用 `build: .`：请运行 `docker-compose up -d --build` 重新构建并重启。
+
 ### ⚠️ 注意事项
 
 1. **Token 过期**：麦当劳 Token 可能会过期。如果过期，Bot 会在每天的推送中提示你 `Token invalid`，并自动暂停该账号的每日自动领券以减少无效请求。此时请重新发送新 Token 给 Bot，或在更新 Token 后使用 `/autoclaim on` 重新开启自动领券。
