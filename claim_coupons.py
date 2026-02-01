@@ -75,6 +75,7 @@ def cleanup_for_telegram(text):
     # Check if this is a claim result (contains couponId and couponCode)
     is_claim_result = any("couponId" in line or "couponCode" in line for line in raw_lines)
     img_re = re.compile(r"<img[^>]*src=[\"']([^\"']+)[\"']", re.IGNORECASE)
+    summary_re = re.compile(r"\*\*[^*]+\*\*\s*[:\uFF1A]\s*\S+")
     
     if is_claim_result:
         # Format claim results: extract coupon name and code, hide technical details
@@ -89,7 +90,7 @@ def cleanup_for_telegram(text):
             
             # Capture header/summary lines before coupons
             if not in_coupon_section and "couponId" not in line and "couponCode" not in line and "图片" not in line:
-                if "###" in stripped or "总计" in stripped or "成功" in stripped or "失败" in stripped:
+                if summary_re.search(stripped) or "###" in stripped or "领券结果" in stripped:
                     clean_header = clean_text(stripped.lstrip("#"))
                     header_lines.append(clean_header)
                     continue
@@ -103,18 +104,22 @@ def cleanup_for_telegram(text):
                 in_coupon_section = True
                 content = stripped[2:].strip()
                 
-                # Check for key-value pair (support both : and ：)
-                has_colon = "：" in content or ": " in content or ":" in content
-                
-                if has_colon:
-                    key = None
-                    value = None
-                    if "：" in content:
-                        key, value = content.split("：", 1)
-                    elif ": " in content:
-                        key, value = content.split(": ", 1)
-                    else:
-                        key, value = content.split(":", 1)
+                lower_content = content.lower()
+                if "couponid" in lower_content or "couponcode" in lower_content:
+                    continue
+
+                if "<img" in content:
+                    m = img_re.search(content)
+                    if m:
+                        current_coupon['image'] = m.group(1)
+                    if "图片" in content or lower_content.startswith(("image", "img")):
+                        continue
+
+                # Check for key-value pair (support both : and fullwidth colon)
+                parts = re.split(r"[:\uFF1A]", content, maxsplit=1)
+                if len(parts) == 2:
+                    key = parts[0]
+                    value = parts[1]
                         
                     key = key.strip()
                     value = value.strip()

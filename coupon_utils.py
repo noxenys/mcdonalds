@@ -208,6 +208,7 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
     # we should make now naive or make parsed dates aware.
     # Simpler to make now naive (stripping tzinfo) since we manually adjusted to CST.
     now = now.replace(tzinfo=None)
+    now_date = now.date()
     
     
     # 解析优惠券文本，按行或按段落分割
@@ -269,7 +270,8 @@ def check_expiring_soon(coupons_text: str, days_threshold: int = 3) -> List[Dict
             if not current_coupon:
                 current_coupon = {'name': name_candidate or "", 'raw_text': line}
             current_coupon['expiry_date'] = expiry
-            current_coupon['days_left'] = (expiry - now).days
+            expiry_date = expiry.date()
+            current_coupon['days_left'] = (expiry_date - now_date).days
             current_coupon['expiry_line_idx'] = idx
     
     # 添加最后一个
