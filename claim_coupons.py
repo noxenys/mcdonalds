@@ -100,7 +100,7 @@ def cleanup_for_telegram(text):
             # - Coupon Name
             # - couponId: ...
             # - couponCode: ...
-            if stripped.startswith("- "):
+            if stripped.startswith(("- ", "* ", "+ ")):
                 in_coupon_section = True
                 content = stripped[2:].strip()
                 
