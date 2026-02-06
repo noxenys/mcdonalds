@@ -16,7 +16,8 @@ def check_and_install_packages():
         'dotenv': 'python-dotenv',
         'mcp': 'mcp'
     }
-    auto_install = os.getenv("AUTO_INSTALL_DEPS", "0").strip().lower() in {"1", "true", "yes"}
+    # Default to auto-installing dependencies to be more user-friendly on PaaS
+    auto_install = os.getenv("AUTO_INSTALL_DEPS", "1").strip().lower() in {"1", "true", "yes"}
     missing_packages = []
     for module, package in required.items():
         try:
