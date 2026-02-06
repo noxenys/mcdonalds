@@ -45,35 +45,10 @@ def cleanup_for_telegram(text):
         cleaned_raw.append(line)
     raw_lines = cleaned_raw
     
-    # Check if this is an error/failure message
     full_text = "\n".join(raw_lines)
-    is_error = any(keyword in full_text for keyword in ["失败", "错误", "Error", "error", "无可领取"])
-    
-    if is_error:
-        # Clean up error messages - remove markdown headers, format nicely
-        error_lines = []
-        for line in raw_lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            # Remove markdown headers (###, ##, #)
-            if stripped.startswith('#'):
-                stripped = stripped.lstrip('#').strip()
-                # Add emoji if it's the main error title
-                if '失败' in stripped or '错误' in stripped or 'Error' in stripped:
-                    stripped = f"❌ {stripped}"
-            error_lines.append(stripped)
-        
-        # Format with separator
-        if error_lines:
-            SEPARATOR = "━━━━━━━━━━━━━━━━━━━"  # Define locally to avoid circular import
-            result = f"{SEPARATOR}\n"
-            result += "\n".join(error_lines)
-            result += f"\n{SEPARATOR}"
-            return result.strip()
-    
-    # Check if this is a claim result (contains couponId and couponCode)
-    is_claim_result = any("couponId" in line or "couponCode" in line for line in raw_lines)
+    # Claim result may contain "失败: 0张", so detect claim output before generic error handling.
+    claim_marker_re = re.compile(r"\bcoupon\s*(?:id|code)\b|couponid|couponcode|券码|券号|兑换码", re.IGNORECASE)
+    is_claim_result = bool(claim_marker_re.search(full_text))
     img_re = re.compile(r"<img[^>]*src=[\"']([^\"']+)[\"']", re.IGNORECASE)
     summary_re = re.compile(r"\*\*[^*]+\*\*\s*[:\uFF1A]\s*\S+")
     
@@ -87,9 +62,10 @@ def cleanup_for_telegram(text):
         
         for line in raw_lines:
             stripped = line.strip()
+            line_lower = line.lower()
             
             # Capture header/summary lines before coupons
-            if not in_coupon_section and "couponId" not in line and "couponCode" not in line and "图片" not in line:
+            if not in_coupon_section and "couponid" not in line_lower and "couponcode" not in line_lower and "图片" not in line:
                 if summary_re.search(stripped) or "###" in stripped or "领券结果" in stripped:
                     clean_header = clean_text(stripped.lstrip("#"))
                     header_lines.append(clean_header)
@@ -189,8 +165,52 @@ def cleanup_for_telegram(text):
                 name = coupon.get('name', '未知优惠券')
                 formatted_lines.append(f"• {name}")
             formatted_lines.append("")
+
+        if formatted_lines:
+            return "\n".join(formatted_lines).strip()
+
+        # Fallback: even if structure parsing fails, strip noisy technical fields.
+        fallback_lines = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if "couponid" in lowered or "couponcode" in lowered:
+                continue
+            if "<img" in lowered or "图片" in stripped:
+                m = img_re.search(stripped)
+                if m:
+                    fallback_lines.append(f"图片: {m.group(1)}")
+                continue
+            fallback_lines.append(clean_text(stripped.lstrip("#")))
+        return "\n".join(fallback_lines).strip()
+
+    # Check if this is an error/failure message
+    is_error = any(keyword in full_text for keyword in ["失败", "错误", "Error", "error", "无可领取"])
+    
+    if is_error:
+        # Clean up error messages - remove markdown headers, format nicely
+        error_lines = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Remove markdown headers (###, ##, #)
+            if stripped.startswith('#'):
+                stripped = stripped.lstrip('#').strip()
+                # Add emoji if it's the main error title
+                if '失败' in stripped or '错误' in stripped or 'Error' in stripped:
+                    stripped = f"❌ {stripped}"
+            error_lines.append(stripped)
         
-        return "\n".join(formatted_lines).strip() if formatted_lines else text
+        # Format with separator
+        if error_lines:
+            SEPARATOR = "━━━━━━━━━━━━━━━━━━━"  # Define locally to avoid circular import
+            result = f"{SEPARATOR}\n"
+            result += "\n".join(error_lines)
+            result += f"\n{SEPARATOR}"
+            return result.strip()
     
     # Original logic for regular coupon lists
     current_coupon = {}
