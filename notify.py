@@ -2,6 +2,7 @@ import os
 import httpx
 import logging
 import asyncio
+from urllib.parse import quote
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
@@ -31,31 +32,17 @@ async def send_telegram(token, chat_id, message):
     base_payload = {
         "chat_id": chat_id,
         "text": message,
-        "parse_mode": "Markdown",
     }
     try:
         await _request_with_retry("POST", url, json=base_payload)
         logger.info("Telegram notification sent successfully.")
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code if e.response is not None else None
-        if status == 400:
-            payload = {
-                "chat_id": chat_id,
-                "text": message,
-            }
-            try:
-                await _request_with_retry("POST", url, json=payload)
-                logger.info("Telegram notification sent successfully without parse_mode.")
-            except Exception as e2:
-                logger.error(f"Failed to send Telegram notification in plain text: {e2}")
-        else:
-            logger.error(f"Failed to send Telegram notification: {e}")
     except Exception as e:
         logger.error(f"Failed to send Telegram notification: {e}")
 
 
 async def send_bark(key, message):
-    url = f"https://api.day.app/{key}/McDonalds_Coupon/{message}"
+    encoded_message = quote(message, safe="")
+    url = f"https://api.day.app/{key}/McDonalds_Coupon/{encoded_message}"
     try:
         await _request_with_retry("GET", url)
         logger.info("Bark notification sent successfully.")
@@ -123,4 +110,3 @@ if __name__ == "__main__":
 
     load_dotenv()
     asyncio.run(push_all("Test message from McDonalds Script"))
-

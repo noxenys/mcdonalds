@@ -16,18 +16,30 @@ def check_and_install_packages():
         'dotenv': 'python-dotenv',
         'mcp': 'mcp'
     }
+    auto_install = os.getenv("AUTO_INSTALL_DEPS", "0").strip().lower() in {"1", "true", "yes"}
+    missing_packages = []
     for module, package in required.items():
         try:
             importlib.import_module(module)
         except ImportError:
+            if not auto_install:
+                missing_packages.append(package)
+                continue
             print(f"⚠️  Missing runtime dependency: {module}. Auto-installing {package}...")
             try:
                 subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+                importlib.import_module(module)
                 print(f"✅  Installed {package}.")
             except Exception as e:
                 print(f"❌  Failed to install {package}: {e}")
+                missing_packages.append(package)
+    return sorted(set(missing_packages))
 
-check_and_install_packages()
+missing_packages = check_and_install_packages()
+if missing_packages:
+    print(f"Error: Missing runtime dependencies: {', '.join(missing_packages)}")
+    print("Install requirements first: pip install -r requirements.txt")
+    sys.exit(1)
 
 import logging
 import re
@@ -539,7 +551,7 @@ def get_user_token(user_id):
     finally:
         session.close()
 
-def save_user_token(user_id, username, token):
+def save_user_token(user_id, username, token, sync_default_account=True):
     session = get_db()
     try:
         user = session.query(User).filter(User.user_id == user_id).first()
@@ -553,8 +565,9 @@ def save_user_token(user_id, username, token):
             session.add(user)
         session.commit()
         
-        # Also sync to default account
-        upsert_account(user_id, "default", token, True)
+        # Keep compatibility with legacy single-account flow.
+        if sync_default_account:
+            upsert_account(user_id, "default", token, True)
     except Exception as e:
         session.rollback()
         logger.error(f"Error in save_user_token: {e}")
@@ -706,7 +719,7 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Reuse verification logic
     result = await claim_for_token(token, enable_push=False)
     
-    if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
+    if is_result_error_message(result):
          await update.message.reply_text(f"❌ Token 无效或连接失败。\n{result}")
     else:
         save_user_token(user_id, username, token)
@@ -762,7 +775,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             result = await claim_for_token(text, enable_push=False)
             
-            if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
+            if is_result_error_message(result):
                  await update.message.reply_text(format_error_msg(f"Token 无效或连接失败\n{result}", show_help=True))
             else:
                 save_user_token(user_id, username, text)
@@ -791,12 +804,13 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     progress_msg = await update.message.reply_text("🍟 正在为你领券...")
     try:
         result = await claim_for_token(token, enable_push=False)
-        success = True
-        lower = result.lower()
-        if "error" in lower or "401" in result or "unauthorized" in lower:
-            success = False
+        success = is_claim_success_result(result)
         update_claim_stats(user_id, success)
-        await update.message.reply_text(f"完成！\n{result}", parse_mode='Markdown')
+        display_result = sanitize_text(result or "")
+        if display_result:
+            await send_chunked(update, f"完成！\n{display_result}", parse_mode=None)
+        else:
+            await update.message.reply_text("完成！")
     finally:
         if progress_msg:
             try:
@@ -937,6 +951,83 @@ def strip_mcp_header(text: str) -> str:
         cleaned_raw.append(line)
     return "\n".join(cleaned_raw)
 
+def is_result_error_message(result: str) -> bool:
+    if result is None:
+        return True
+    text = str(result).strip()
+    if not text:
+        return True
+    if is_mcp_error_message(text):
+        return True
+
+    lower = text.lower()
+    if "mcp" in lower and ("429" in lower or "异常" in text or "error" in lower):
+        return True
+    if any(marker in lower for marker in [
+        "unauthorized",
+        "invalid token",
+        "token invalid",
+        "forbidden",
+        "401",
+    ]):
+        return True
+    if any(marker in text for marker in [
+        "Token 无效",
+        "token 无效",
+        "Token已失效",
+        "token已失效",
+        "未授权",
+        "认证失败",
+    ]):
+        return True
+    if re.search(r"(^|\n)\s*(?:❌|错误[:：]?|error[:：]?)", text, re.IGNORECASE):
+        return True
+
+    fail_match = (
+        re.search(r"失败\s*[:：]\s*(\d+)", text) or
+        re.search(r"\bfail(?:ed|ure)?\b\s*[:：]?\s*(\d+)", lower)
+    )
+    success_match = (
+        re.search(r"成功\s*[:：]\s*(\d+)", text) or
+        re.search(r"\bsuccess\b\s*[:：]?\s*(\d+)", lower)
+    )
+    if fail_match and int(fail_match.group(1)) > 0:
+        success_count = int(success_match.group(1)) if success_match else 0
+        if success_count == 0:
+            return True
+    return False
+
+def is_token_invalid_result(result: str) -> bool:
+    if not result:
+        return False
+    text = str(result)
+    lower = text.lower()
+    if any(marker in lower for marker in ["401", "unauthorized", "invalid token", "token invalid", "forbidden"]):
+        return True
+    return any(marker in text for marker in ["Token 无效", "token 无效", "Token已失效", "token已失效", "未授权"])
+
+def is_claim_success_result(result: str) -> bool:
+    if is_result_error_message(result):
+        return False
+    text = str(result)
+    lower = text.lower()
+    success_match = (
+        re.search(r"成功\s*[:：]\s*(\d+)", text) or
+        re.search(r"\bsuccess\b\s*[:：]?\s*(\d+)", lower)
+    )
+    fail_match = (
+        re.search(r"失败\s*[:：]\s*(\d+)", text) or
+        re.search(r"\bfail(?:ed|ure)?\b\s*[:：]?\s*(\d+)", lower)
+    )
+    if success_match or fail_match:
+        success_count = int(success_match.group(1)) if success_match else 0
+        fail_count = int(fail_match.group(1)) if fail_match else 0
+        if success_count == 0 and fail_count > 0:
+            return False
+        if success_count > 0:
+            return True
+    return True
+
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     token = get_user_token(user_id)
@@ -948,7 +1039,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
         
         # 检查结果是否为空或错误
-        if not result or is_mcp_error_message(result):
+        if is_result_error_message(result):
             if progress_msg:
                 try:
                     await progress_msg.delete()
@@ -1242,46 +1333,45 @@ async def cleartoken_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    token = get_user_token(user_id)
     args = context.args
     if not args:
         msg = (
-            "👤 *多账号管理*\n\n"
+            "👤 多账号管理\n\n"
             "你可以同时绑定多个麦当劳账号，并随时切换。\n\n"
-            "📋 *命令列表*：\n"
-            "`/account add <名称> <Token>` - 添加新账号\n"
-            "`/account use <名称>` - 切换到指定账号\n"
-            "`/account list` - 查看已添加的账号\n"
-            "`/account del <名称>` - 删除指定账号\n"
+            "📋 命令列表：\n"
+            "/account add <名称> <Token> - 添加新账号\n"
+            "/account use <名称> - 切换到指定账号\n"
+            "/account list - 查看已添加的账号\n"
+            "/account del <名称> - 删除指定账号\n"
         )
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg)
         return
     sub = args[0].lower()
     if sub == "add":
         if len(args) < 3:
-            await update.message.reply_text("❌ 格式错误\n请使用：`/account add <名称> <Token>`", parse_mode='Markdown')
+            await update.message.reply_text("❌ 格式错误\n请使用：/account add <名称> <Token>")
             return
         name = args[1]
         new_token = " ".join(args[2:])
         if len(new_token) < 20:
-             await update.message.reply_text("❌ Token 无效或太短，请检查。", parse_mode='Markdown')
+             await update.message.reply_text("❌ Token 无效或太短，请检查。")
              return
         
         # Verify token validity before adding
-        await update.message.reply_text(f"🔍 正在验证账号 `{name}` 的 Token...", parse_mode='Markdown')
+        await update.message.reply_text(f"🔍 正在验证账号 {name} 的 Token...")
         result = await claim_for_token(new_token, enable_push=False)
         
-        if "Error" in result and "tool not found" not in result and "Execution Result" not in result:
+        if is_result_error_message(result):
              await update.message.reply_text(f"❌ Token 验证失败，账号未添加。\n错误信息：{result}")
              return
 
         upsert_account(user_id, name, new_token, True)
-        save_user_token(user_id, update.effective_user.username, new_token)
-        await update.message.reply_text(f"✅ 账号 `{name}` 添加成功并设为当前账号！", parse_mode='Markdown')
+        save_user_token(user_id, update.effective_user.username, new_token, sync_default_account=False)
+        await update.message.reply_text(f"✅ 账号 {name} 添加成功并设为当前账号！")
         
     elif sub == "use":
         if len(args) < 2:
-            await update.message.reply_text("❌ 格式错误\n请使用：`/account use <名称>`", parse_mode='Markdown')
+            await update.message.reply_text("❌ 格式错误\n请使用：/account use <名称>")
             return
         name = args[1]
         accounts = get_accounts(user_id)
@@ -1291,14 +1381,14 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 target = acc
                 break
         if not target:
-            await update.message.reply_text(f"❌ 未找到名为 `{name}` 的账号。", parse_mode='Markdown')
+            await update.message.reply_text(f"❌ 未找到名为 {name} 的账号。")
             return
         if not target[1]:
             await update.message.reply_text("⚠️ 该账号的 Token 无法读取（可能启用了 MCD_TOKEN_SECRET 但当前未设置）。请先配置正确的密钥。")
             return
         set_active_account(user_id, name)
-        save_user_token(user_id, update.effective_user.username, target[1])
-        await update.message.reply_text(f"✅ 已切换到账号 `{name}`。", parse_mode='Markdown')
+        save_user_token(user_id, update.effective_user.username, target[1], sync_default_account=False)
+        await update.message.reply_text(f"✅ 已切换到账号 {name}。")
         
     elif sub == "list":
         accounts = get_accounts(user_id)
@@ -1308,12 +1398,12 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lines = []
         for name, acc_token, is_active in accounts:
             mark = "✅" if is_active else "⚪️"
-            lines.append(f"{mark} `{name}`")
-        await update.message.reply_text("📋 **你的账号列表**：\n\n" + "\n".join(lines), parse_mode='Markdown')
+            lines.append(f"{mark} {name}")
+        await update.message.reply_text("📋 你的账号列表：\n\n" + "\n".join(lines))
         
     elif sub == "del":
         if len(args) < 2:
-            await update.message.reply_text("❌ 格式错误\n请使用：`/account del <名称>`", parse_mode='Markdown')
+            await update.message.reply_text("❌ 格式错误\n请使用：/account del <名称>")
             return
         name = args[1]
         accounts = get_accounts(user_id)
@@ -1326,7 +1416,7 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     was_active = True
                 break
         if not exists:
-            await update.message.reply_text(f"❌ 未找到名为 `{name}` 的账号。", parse_mode='Markdown')
+            await update.message.reply_text(f"❌ 未找到名为 {name} 的账号。")
             return
         
         # Use SQLAlchemy session for deletion to be safe
@@ -1347,13 +1437,13 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if remaining:
                 first_name, first_token, _ = remaining[0]
                 set_active_account(user_id, first_name)
-                save_user_token(user_id, update.effective_user.username, first_token)
-                await update.message.reply_text(f"✅ 已删除账号 `{name}`。\n自动切换到 `{first_name}`。", parse_mode='Markdown')
+                save_user_token(user_id, update.effective_user.username, first_token, sync_default_account=False)
+                await update.message.reply_text(f"✅ 已删除账号 {name}。\n自动切换到 {first_name}。")
             else:
                 delete_user_token(user_id)
-                await update.message.reply_text(f"✅ 已删除账号 `{name}`。\n你当前没有绑定任何账号。", parse_mode='Markdown')
+                await update.message.reply_text(f"✅ 已删除账号 {name}。\n你当前没有绑定任何账号。")
         else:
-            await update.message.reply_text(f"✅ 已删除账号 `{name}`。", parse_mode='Markdown')
+            await update.message.reply_text(f"✅ 已删除账号 {name}。")
             
     else:
         await update.message.reply_text("❓ 未知子命令，请直接输入 `/account` 查看帮助。")
@@ -1439,13 +1529,8 @@ async def process_user_claim(application: Application, user_id, token, report_en
 
             logger.info(f"Claiming for user {user_id}")
             result = await claim_for_token(token, enable_push=False)
-            success = True
-            lower = result.lower()
-            token_invalid = False
-            if "error" in lower or "401" in result or "unauthorized" in lower:
-                success = False
-                if "401" in result or "unauthorized" in lower:
-                    token_invalid = True
+            success = is_claim_success_result(result)
+            token_invalid = is_token_invalid_result(result)
             update_claim_stats(user_id, success)
             if token_invalid:
                 set_auto_claim_enabled(user_id, False)
@@ -1454,8 +1539,10 @@ async def process_user_claim(application: Application, user_id, token, report_en
             if report_enabled is None or report_enabled == 1:
                 message = f"🔔 每日自动领券结果：\n\n{result}"
 
-                if "error" in lower or "401" in result or "unauthorized" in lower:
+                if token_invalid:
                     message += "\n\n⚠️ 注意：你的 Token 可能已失效或无效，请重新发送新的 Token 进行绑定。"
+                elif is_result_error_message(result):
+                    message += "\n\n⚠️ 本次领券失败，可能是服务短暂异常，建议稍后手动重试。"
                 elif success:
                     # Add random quote for successful claims
                     quote = random.choice(MCD_QUOTES)
@@ -1488,7 +1575,7 @@ async def process_user_today(application: Application, user_id, token, semaphore
             result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
             
             # 检查结果是否为空或错误
-            if not result or is_mcp_error_message(result):
+            if is_result_error_message(result):
                 await safe_bot_send_message(application.bot, user_id, "今天麦当劳 MCP 服务似乎挂了，我暂时没法生成今日推荐，可以稍后再试一次。")
                 return
             
@@ -1519,7 +1606,7 @@ async def process_user_today(application: Application, user_id, token, semaphore
             await safe_bot_send_message(application.bot, user_id, "⏰ 今日推荐生成超时，稍后再试。")
         except Exception as e:
             logger.error(f"Failed to generate today recommendation for user {user_id}: {e}", exc_info=True)
-            await safe_bot_send_message(application.bot, user_id, f"❌ 生成今日推荐时出现错误：{str(e)[:100]}")
+            await safe_bot_send_message(application.bot, user_id, "❌ 生成今日推荐时出现错误，请稍后再试。")
 
 async def scheduled_today_job(application: Application):
     logger.info("Running scheduled daily today-recommendation for all users...")
@@ -1551,10 +1638,15 @@ async def scheduled_expiry_check(application: Application):
                 continue
             
             # 转换为文本格式
-            coupons_text = ""
-            for content in raw_coupons:
-                if content.type == "text":
-                    coupons_text += content.text + "\n"
+            if isinstance(raw_coupons, str):
+                if is_result_error_message(raw_coupons):
+                    continue
+                coupons_text = raw_coupons
+            else:
+                coupons_text = ""
+                for content in raw_coupons:
+                    if content.type == "text":
+                        coupons_text += content.text + "\n"
             
             if not coupons_text or is_mcp_error_message(coupons_text):
                 continue
@@ -1604,10 +1696,15 @@ async def scheduled_meal_reminder(application: Application, meal_type: str):
                 continue
             
             # 转换为文本格式
-            coupons_text = ""
-            for content in raw_coupons:
-                if content.type == "text":
-                    coupons_text += content.text + "\n"
+            if isinstance(raw_coupons, str):
+                if is_result_error_message(raw_coupons):
+                    continue
+                coupons_text = raw_coupons
+            else:
+                coupons_text = ""
+                for content in raw_coupons:
+                    if content.type == "text":
+                        coupons_text += content.text + "\n"
             
             if not coupons_text or is_mcp_error_message(coupons_text):
                 continue

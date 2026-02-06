@@ -353,12 +353,15 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
 def is_mcp_error_message(text: str) -> bool:
     if not text:
         return False
-    # 如果文本很长，通常是正常内容而不是简单的错误提示
-    if len(text) > 200:
-        return False
+    text = str(text).strip()
+    lower = text.lower()
     if "麦当劳 MCP 服务当前出现异常" in text:
         return True
     if "麦当劳 MCP 接口返回 429" in text:
+        return True
+    if any(marker in lower for marker in ["unauthorized", "forbidden", "invalid token", "token invalid"]):
+        return True
+    if "Error: Invalid Token." in text:
         return True
     return False
 
