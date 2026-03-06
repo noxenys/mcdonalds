@@ -6,17 +6,23 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 
+CST = timezone(timedelta(hours=8))
+
 def get_cst_now():
-    """获取当前北京时间"""
-    utc_now = datetime.now(timezone.utc)
-    return utc_now + timedelta(hours=8)
+    """获取当前北京时间（带正确的 UTC+8 时区信息）"""
+    return datetime.now(CST)
+
+_MD_BOLD_ITALIC_RE = re.compile(r'(\*{1,3}|_{1,3})(.+?)\1')
+_MD_CODE_RE = re.compile(r'`([^`]+)`')
 
 def clean_markdown_text(text: str) -> str:
-    """清理 Markdown 格式文本"""
+    """清理 Markdown 格式文本，只去除 Markdown 语法标记，保留内容。"""
     if not isinstance(text, str):
         return str(text) if text is not None else ""
-    # Remove Markdown bold/italic/code markers and backslashes
-    return text.replace("**", "").replace("__", "").replace("*", "").replace("`", "").replace("\\", "").strip()
+    result = _MD_BOLD_ITALIC_RE.sub(r'\2', text)
+    result = _MD_CODE_RE.sub(r'\1', result)
+    result = result.replace("\\", "")
+    return result.strip()
 
 # Coupon parsing helpers
 _NAME_PATTERNS = [

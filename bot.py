@@ -8,7 +8,6 @@ import hashlib
 # Runtime Dependency Self-Check (Hotfix)
 def check_and_install_packages():
     required = {
-        'schedule': 'schedule',
         'flask': 'flask',
         'telegram': 'python-telegram-bot',
         'tenacity': 'tenacity',
@@ -47,7 +46,6 @@ import re
 import asyncio
 import time
 import threading
-import schedule
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from dotenv import load_dotenv
@@ -57,12 +55,7 @@ from telegram.error import RetryAfter
 from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message, reorder_calendar_sections
 from coupon_utils import get_cst_now, clean_markdown_text
 
-async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: int = 3500):
-    if not text:
-        return
-    kwargs = {"disable_web_page_preview": True}
-    if parse_mode:
-        kwargs["parse_mode"] = parse_mode
+def _split_into_chunks(text: str, chunk_size: int = 3500) -> list:
     parts = []
     buf = ""
     for line in text.splitlines():
@@ -79,7 +72,15 @@ async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: i
         else:
             for i in range(0, len(p), chunk_size):
                 final_parts.append(p[i:i+chunk_size])
-    for p in final_parts:
+    return final_parts
+
+async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: int = 3500):
+    if not text:
+        return
+    kwargs = {"disable_web_page_preview": True}
+    if parse_mode:
+        kwargs["parse_mode"] = parse_mode
+    for p in _split_into_chunks(text, chunk_size):
         try:
             await safe_reply_text(update, p, **kwargs)
         except Exception:
@@ -94,23 +95,7 @@ async def send_chunked(update: Update, text: str, parse_mode=None, chunk_size: i
 async def send_chunked_update(application, chat_id, text: str, chunk_size: int = 3500):
     if not text:
         return
-    parts = []
-    buf = ""
-    for line in text.splitlines():
-        if len(buf) + len(line) + 1 > chunk_size:
-            parts.append(buf)
-            buf = ""
-        buf = (buf + "\n" + line).strip()
-    if buf:
-        parts.append(buf)
-    final_parts = []
-    for p in parts:
-        if len(p) <= chunk_size:
-            final_parts.append(p)
-        else:
-            for i in range(0, len(p), chunk_size):
-                final_parts.append(p[i:i+chunk_size])
-    for p in final_parts:
+    for p in _split_into_chunks(text, chunk_size):
         try:
             await safe_bot_send_message(application.bot, chat_id, p, disable_web_page_preview=True)
         except Exception:
@@ -481,9 +466,15 @@ def init_db():
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
 
-# Helper to get session
 def get_db():
     return SessionLocal()
+
+def close_db(session):
+    """Properly remove a scoped session from the registry."""
+    try:
+        session.close()
+    finally:
+        SessionLocal.remove()
 
 # --- Database Access Layer (Refactored to use SQLAlchemy) ---
 
@@ -495,7 +486,7 @@ def get_active_account(user_id):
             return (account.name, _decode_token(account.mcp_token))
         return None
     finally:
-        session.close()
+        close_db(session)
 
 def get_accounts(user_id):
     session = get_db()
@@ -503,7 +494,7 @@ def get_accounts(user_id):
         accounts = session.query(Account).filter(Account.user_id == user_id).all()
         return [(acc.name, _decode_token(acc.mcp_token), acc.is_active) for acc in accounts]
     finally:
-        session.close()
+        close_db(session)
 
 def upsert_account(user_id, name, token, set_active):
     session = get_db()
@@ -513,7 +504,6 @@ def upsert_account(user_id, name, token, set_active):
         if account:
             account.mcp_token = stored_token
             if set_active:
-                # Deactivate others
                 session.query(Account).filter(Account.user_id == user_id).update({"is_active": 0})
                 account.is_active = 1
         else:
@@ -526,7 +516,7 @@ def upsert_account(user_id, name, token, set_active):
         session.rollback()
         logger.error(f"Error in upsert_account: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def set_active_account(user_id, name):
     session = get_db()
@@ -538,7 +528,7 @@ def set_active_account(user_id, name):
         session.rollback()
         logger.error(f"Error in set_active_account: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def get_user_token(user_id):
     active_account = get_active_account(user_id)
@@ -550,7 +540,7 @@ def get_user_token(user_id):
         user = session.query(User).filter(User.user_id == user_id).first()
         return _decode_token(user.mcp_token) if user else None
     finally:
-        session.close()
+        close_db(session)
 
 def save_user_token(user_id, username, token, sync_default_account=True):
     session = get_db()
@@ -560,20 +550,18 @@ def save_user_token(user_id, username, token, sync_default_account=True):
         if user:
             user.username = username
             user.mcp_token = stored_token
-            # Ensure auto_claim is enabled if it was null (though default handles it)
         else:
             user = User(user_id=user_id, username=username, mcp_token=stored_token, auto_claim_enabled=1)
             session.add(user)
         session.commit()
         
-        # Keep compatibility with legacy single-account flow.
         if sync_default_account:
             upsert_account(user_id, "default", token, True)
     except Exception as e:
         session.rollback()
         logger.error(f"Error in save_user_token: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def delete_user_token(user_id):
     session = get_db()
@@ -585,16 +573,15 @@ def delete_user_token(user_id):
         session.rollback()
         logger.error(f"Error in delete_user_token: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def get_all_users():
     session = get_db()
     try:
-        # auto_claim_enabled IS NULL OR auto_claim_enabled=1
-        users = session.query(User).filter((User.auto_claim_enabled == None) | (User.auto_claim_enabled == 1)).all()
+        users = session.query(User).filter(User.auto_claim_enabled.is_(None) | (User.auto_claim_enabled == 1)).all()
         return [(u.user_id, _decode_token(u.mcp_token), u.claim_report_enabled) for u in users]
     finally:
-        session.close()
+        close_db(session)
 
 def set_auto_claim_enabled(user_id, enabled):
     session = get_db()
@@ -606,7 +593,7 @@ def set_auto_claim_enabled(user_id, enabled):
         session.rollback()
         logger.error(f"Error in set_auto_claim_enabled: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def set_claim_report_enabled(user_id, enabled):
     session = get_db()
@@ -618,7 +605,7 @@ def set_claim_report_enabled(user_id, enabled):
         session.rollback()
         logger.error(f"Error in set_claim_report_enabled: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def get_user_stats_and_status(user_id):
     session = get_db()
@@ -629,7 +616,7 @@ def get_user_stats_and_status(user_id):
                     user.last_claim_success, user.total_success, user.total_failed, user.created_at)
         return None
     finally:
-        session.close()
+        close_db(session)
 
 def update_claim_stats(user_id, success):
     session = get_db()
@@ -645,7 +632,7 @@ def update_claim_stats(user_id, success):
         session.rollback()
         logger.error(f"Error in update_claim_stats: {e}")
     finally:
-        session.close()
+        close_db(session)
 
 def _coerce_date(value):
     if value is None:
@@ -663,7 +650,7 @@ def get_admin_summary():
     session = get_db()
     try:
         total_users = session.query(User).count()
-        auto_users = session.query(User).filter((User.auto_claim_enabled == None) | (User.auto_claim_enabled == 1)).count()
+        auto_users = session.query(User).filter(User.auto_claim_enabled.is_(None) | (User.auto_claim_enabled == 1)).count()
         
         result = session.query(
             func.sum(User.total_success),
@@ -675,7 +662,7 @@ def get_admin_summary():
         
         return total_users, auto_users, int(total_success), int(total_failed)
     finally:
-        session.close()
+        close_db(session)
 
 # Bot Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1420,7 +1407,6 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(f"❌ 未找到名为 {name} 的账号。")
             return
         
-        # Use SQLAlchemy session for deletion to be safe
         session = get_db()
         try:
             session.query(Account).filter(Account.user_id == user_id, Account.name == name).delete()
@@ -1431,7 +1417,7 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("❌ 删除失败，数据库错误。")
             return
         finally:
-            session.close()
+            close_db(session)
 
         if was_active:
             remaining = get_accounts(user_id)
@@ -1764,7 +1750,9 @@ async def scheduled_meal_reminder(application: Application, meal_type: str):
 
 async def post_init(application: Application) -> None:
     """
-    Set up bot commands menu on startup.
+    Set up bot commands menu on startup and launch the scheduler thread.
+    Called by python-telegram-bot after the event loop is running,
+    so asyncio.get_running_loop() is guaranteed to return the correct loop.
     """
     commands = [
         ("menu", "打开按钮菜单"),
@@ -1784,6 +1772,13 @@ async def post_init(application: Application) -> None:
     ]
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands menu set.")
+
+    global _bot_running
+    _bot_running = True
+
+    loop = asyncio.get_running_loop()
+    threading.Thread(target=run_scheduler, args=(application, loop), daemon=True).start()
+    logger.info("Scheduler thread started from post_init.")
 
 def run_scheduler(application, loop):
     """
@@ -1824,11 +1819,21 @@ def run_scheduler(application, loop):
 
 # Keep-alive web server for PaaS (Koyeb/Render/HF Spaces)
 app = Flask(__name__)
+_bot_running = False
 
 @app.route('/')
 @app.route('/health')
 def health_check():
-    return "OK", 200
+    status = {"bot": "running" if _bot_running else "starting"}
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        status["db"] = "ok"
+    except Exception as e:
+        status["db"] = f"error: {e}"
+        return status, 503
+    code = 200 if _bot_running else 503
+    return status, code
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -1893,12 +1898,8 @@ def main():
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Start the scheduler in a background thread
-    # We need to pass the event loop to the thread so it can schedule async tasks back to the main loop
-    loop = asyncio.get_event_loop()
-    threading.Thread(target=run_scheduler, args=(application, loop), daemon=True).start()
-
     # Start Flask server in a background thread
+    # (Scheduler thread is started in post_init after the event loop is running)
     threading.Thread(target=run_flask, daemon=True).start()
 
     print("Bot started...")

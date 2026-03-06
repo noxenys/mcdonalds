@@ -2,7 +2,6 @@ import os
 import httpx
 import logging
 import asyncio
-from urllib.parse import quote
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
@@ -41,10 +40,13 @@ async def send_telegram(token, chat_id, message):
 
 
 async def send_bark(key, message):
-    encoded_message = quote(message, safe="")
-    url = f"https://api.day.app/{key}/McDonalds_Coupon/{encoded_message}"
+    url = f"https://api.day.app/{key}"
+    payload = {
+        "title": "McDonalds Coupon",
+        "body": message,
+    }
     try:
-        await _request_with_retry("GET", url)
+        await _request_with_retry("POST", url, json=payload)
         logger.info("Bark notification sent successfully.")
     except Exception as e:
         logger.error(f"Failed to send Bark notification: {e}")
