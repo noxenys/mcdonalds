@@ -18,8 +18,9 @@
 
 ### 📱 完善的用户体验
 - **消息格式优化**：移动端友好的消息布局，清晰的视觉分隔
+- **智能错误识别**：自动区分 Token 失效和服务器异常，Token 失效才暂停自动领券，服务器异常自动重试
 - **多账号管理**：支持绑定多个麦当劳账号，随时切换
-- **统计可视化**：查看领券成功率、成就系统
+- **统计可视化**：查看领券成功率、成就系统（服务器异常不计入失败统计）
 - **多渠道推送**：支持 Telegram, Bark, 飞书, Server酱等多种推送方式
 
 ### 💰 零成本部署
@@ -71,10 +72,9 @@
 不需要下载代码，直接创建一个 `docker-compose.yml` 文件：
 
 ```yaml
-version: '3.8'
 services:
   mcdonalds-bot:
-    image: ghcr.io/noxenys/mcdonalds:latest # 也可以指定版本号，如 :2.0.11
+    image: ghcr.io/noxenys/mcdonalds:latest # 也可以指定版本号，如 :2.0.13
     container_name: mcd_bot
     restart: always
     environment:
@@ -89,8 +89,8 @@ services:
 docker-compose up -d
 ```
 搞定！Bot 已经跑起来了。
-### 3. (可选) 手动编译 (推荐)
-如果你想使用最新代码，或者遇到依赖问题（如 `schedule` 模块缺失）：
+### 3. (可选) 手动编译
+如果你想使用最新代码：
 1. `git clone` 本仓库。
 2. 修改 `docker-compose.yml`，确保使用 `build: .` 而不是 `image: ...`。
 3. `docker-compose up -d --build`。
@@ -261,9 +261,11 @@ Bot 会在以下时间自动为你服务：
 
 ### ⚠️ 注意事项
 
-1. **Token 过期**：麦当劳 Token 可能会过期。如果过期，Bot 会在每天的推送中提示你 `Token invalid`，并自动暂停该账号的每日自动领券以减少无效请求。此时请重新发送新 Token 给 Bot，或在更新 Token 后使用 `/autoclaim on` 重新开启自动领券。
-2. **时区问题**：程序默认设定每天 10:30 运行。Docker 镜像已内置 `Asia/Shanghai` 时区，确保你领券是在白天而不是半夜。
-3. **隐私安全**：Bot 的数据库存储了用户的 Token。请确保你的数据库文件（`users.db`）安全，不要分享给他人。
+1. **Token 失效 vs 服务器异常**：Bot 会自动区分这两种情况：
+   - **Token 失效**（401/403）：Bot 会明确提示「Token 已失效」，并**自动暂停**该账号的自动领券，避免无效请求。此时请重新发送新 Token 给 Bot，然后使用 `/autoclaim on` 重新开启。
+   - **服务器异常**（429/500/超时）：Bot 会提示「麦当劳服务暂时异常」，**不会暂停**自动领券，也**不会计入失败统计**，明天会自动重试。
+2. **时区问题**：程序内部始终使用 UTC+8（北京时间）计算，不依赖服务器系统时区。Docker 镜像额外设置了 `Asia/Shanghai` 作为系统时区，确保日志时间也正确显示。
+3. **隐私安全**：Bot 的数据库存储了用户的 Token。请确保你的数据库文件（`data/` 目录）安全，不要分享给他人。
 4. **加密密钥**：如果配置了 `MCD_TOKEN_SECRET`，请长期固定该值；更改或丢失会导致已加密 Token 无法解密。
 
 ---

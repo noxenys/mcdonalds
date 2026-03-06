@@ -342,27 +342,48 @@ async def call_mcp_tool(token, tool_name, arguments=None, enable_push=False, ret
                     
     except Exception as e:
         raw = str(e)
-        if "429" in raw:
-            friendly = "麦当劳 MCP 接口返回 429（请求过于频繁），请稍后再试。"
+        lower_raw = raw.lower()
+        if any(kw in lower_raw for kw in ["401", "unauthorized", "403", "forbidden", "invalid token", "token invalid"]):
+            friendly = "[TOKEN_ERROR] 麦当劳 MCP 认证失败，Token 可能已失效或无效，请重新绑定。"
+        elif "429" in raw:
+            friendly = "[SERVER_ERROR] 麦当劳 MCP 接口返回 429（请求过于频繁），请稍后再试。"
         else:
-            friendly = "麦当劳 MCP 服务当前出现异常，可能在维护或短暂故障，请稍后再试。"
+            friendly = "[SERVER_ERROR] 麦当劳 MCP 服务当前出现异常，可能在维护或短暂故障，请稍后再试。"
         print(f"{friendly} 详细信息：{raw}")
         return friendly
 
-def is_mcp_error_message(text: str) -> bool:
+def is_mcp_token_error(text: str) -> bool:
+    """判断结果是否为 Token 认证相关错误（Token 失效/无效/未授权）"""
     if not text:
         return False
     text = str(text).strip()
     lower = text.lower()
+    if "[TOKEN_ERROR]" in text:
+        return True
+    if "Error: Invalid Token." in text:
+        return True
+    if any(marker in lower for marker in ["unauthorized", "forbidden", "invalid token", "token invalid"]):
+        return True
+    if any(marker in text for marker in ["Token 无效", "token 无效", "Token已失效", "token已失效", "未授权", "认证失败"]):
+        return True
+    return False
+
+def is_mcp_server_error(text: str) -> bool:
+    """判断结果是否为服务器端错误（429/500/超时/维护等，与 Token 无关）"""
+    if not text:
+        return False
+    text = str(text).strip()
+    if "[SERVER_ERROR]" in text:
+        return True
     if "麦当劳 MCP 服务当前出现异常" in text:
         return True
     if "麦当劳 MCP 接口返回 429" in text:
         return True
-    if any(marker in lower for marker in ["unauthorized", "forbidden", "invalid token", "token invalid"]):
-        return True
-    if "Error: Invalid Token." in text:
-        return True
     return False
+
+def is_mcp_error_message(text: str) -> bool:
+    """判断结果是否为任意 MCP 错误（Token 错误或服务器错误）"""
+    return is_mcp_token_error(text) or is_mcp_server_error(text)
 
 def strip_calendar_today_header(text: str) -> str:
     if not text:

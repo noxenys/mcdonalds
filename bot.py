@@ -52,7 +52,7 @@ from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.error import RetryAfter
-from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message, reorder_calendar_sections
+from claim_coupons import claim_for_token, list_available_coupons, list_my_coupons, list_campaign_calendar, get_today_recommendation, is_mcp_error_message, is_mcp_token_error, is_mcp_server_error, reorder_calendar_sections
 from coupon_utils import get_cst_now, clean_markdown_text
 
 def _split_into_chunks(text: str, chunk_size: int = 3500) -> list:
@@ -707,8 +707,12 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Reuse verification logic
     result = await claim_for_token(token, enable_push=False)
     
-    if is_result_error_message(result):
-         await update.message.reply_text(f"❌ Token 无效或连接失败。\n{result}")
+    if is_token_invalid_result(result):
+        await update.message.reply_text("❌ Token 无效或已失效，请检查后重新发送。")
+    elif is_server_error_result(result):
+        await update.message.reply_text("⚠️ 麦当劳服务暂时异常，无法验证 Token，请稍后再试。")
+    elif is_result_error_message(result):
+        await update.message.reply_text(f"❌ 验证失败。\n{result}")
     else:
         save_user_token(user_id, username, token)
         await update.message.reply_text(
@@ -763,8 +767,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             result = await claim_for_token(text, enable_push=False)
             
-            if is_result_error_message(result):
-                 await update.message.reply_text(format_error_msg(f"Token 无效或连接失败\n{result}", show_help=True))
+            if is_token_invalid_result(result):
+                await update.message.reply_text(format_error_msg("Token 无效或已失效，请检查后重新发送", show_help=True))
+            elif is_server_error_result(result):
+                await update.message.reply_text(format_warning_msg("麦当劳服务暂时异常，无法验证你的 Token，请稍后再试。"))
+            elif is_result_error_message(result):
+                await update.message.reply_text(format_error_msg(f"验证失败\n{result}", show_help=True))
             else:
                 save_user_token(user_id, username, text)
                 await update.message.reply_text(
@@ -792,13 +800,23 @@ async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     progress_msg = await update.message.reply_text("🍟 正在为你领券...")
     try:
         result = await claim_for_token(token, enable_push=False)
+        token_invalid = is_token_invalid_result(result)
+        server_error = is_server_error_result(result)
         success = is_claim_success_result(result)
-        update_claim_stats(user_id, success)
-        display_result = sanitize_text(result or "")
-        if display_result:
-            await send_chunked(update, f"完成！\n{display_result}", parse_mode=None)
+
+        if token_invalid:
+            update_claim_stats(user_id, False)
+            await update.message.reply_text("❌ 你的 Token 已失效或无效，请重新发送新的 Token 完成绑定。")
+        elif server_error:
+            display_result = re.sub(r'^\[(TOKEN_ERROR|SERVER_ERROR)\]\s*', '', str(result or ''))
+            await update.message.reply_text(f"⚠️ 麦当劳服务暂时异常，请稍后再试。\n\n{sanitize_text(display_result)}")
         else:
-            await update.message.reply_text("完成！")
+            update_claim_stats(user_id, success)
+            display_result = sanitize_text(result or "")
+            if display_result:
+                await send_chunked(update, f"完成！\n{display_result}", parse_mode=None)
+            else:
+                await update.message.reply_text("完成！")
     finally:
         if progress_msg:
             try:
@@ -865,8 +883,11 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             text_result = strip_mcp_header(text_result)
             text_result = reorder_calendar_sections(text_result)
 
+        if isinstance(text_result, str) and is_mcp_token_error(text_result):
+            await update.message.reply_text("❌ 你的 Token 已失效或无效，请重新发送新的 Token 完成绑定。")
+            return
         if isinstance(text_result, str) and is_mcp_error_message(text_result):
-            await update.message.reply_text("今天麦当劳 MCP 服务似乎出问题了，我暂时查不到活动日历，可以稍后再试一次 /calendar。")
+            await update.message.reply_text("⚠️ 麦当劳服务暂时异常，无法查询活动日历，请稍后再试 /calendar。")
             return
 
         if not calendar_nodes and not text_result:
@@ -901,7 +922,7 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def sanitize_text(text: str) -> str:
     if not text:
         return ""
-    # 移除图片标签和裸链接
+    text = re.sub(r'\[(TOKEN_ERROR|SERVER_ERROR)\]\s*', '', text)
     cleaned_lines = []
     for line in text.splitlines():
         l = line.strip()
@@ -939,7 +960,26 @@ def strip_mcp_header(text: str) -> str:
         cleaned_raw.append(line)
     return "\n".join(cleaned_raw)
 
+def is_token_invalid_result(result: str) -> bool:
+    """判断结果是否为 Token 失效/无效（应禁用自动领券、提醒用户重新绑定）"""
+    if not result:
+        return False
+    return is_mcp_token_error(str(result))
+
+def is_server_error_result(result: str) -> bool:
+    """判断结果是否为服务器端错误（不应计入失败、不应禁用自动领券）"""
+    if not result:
+        return False
+    text = str(result).strip()
+    if is_mcp_server_error(text):
+        return True
+    lower = text.lower()
+    if "mcp" in lower and ("429" in lower or "异常" in text):
+        return True
+    return False
+
 def is_result_error_message(result: str) -> bool:
+    """判断结果是否为任何类型的错误（Token 失效 或 服务器错误 或 领券失败）"""
     if result is None:
         return True
     text = str(result).strip()
@@ -948,29 +988,10 @@ def is_result_error_message(result: str) -> bool:
     if is_mcp_error_message(text):
         return True
 
-    lower = text.lower()
-    if "mcp" in lower and ("429" in lower or "异常" in text or "error" in lower):
-        return True
-    if any(marker in lower for marker in [
-        "unauthorized",
-        "invalid token",
-        "token invalid",
-        "forbidden",
-        "401",
-    ]):
-        return True
-    if any(marker in text for marker in [
-        "Token 无效",
-        "token 无效",
-        "Token已失效",
-        "token已失效",
-        "未授权",
-        "认证失败",
-    ]):
-        return True
     if re.search(r"(^|\n)\s*(?:❌|错误[:：]?|error[:：]?)", text, re.IGNORECASE):
         return True
 
+    lower = text.lower()
     fail_match = (
         re.search(r"失败\s*[:：]\s*(\d+)", text) or
         re.search(r"\bfail(?:ed|ure)?\b\s*[:：]?\s*(\d+)", lower)
@@ -985,16 +1006,8 @@ def is_result_error_message(result: str) -> bool:
             return True
     return False
 
-def is_token_invalid_result(result: str) -> bool:
-    if not result:
-        return False
-    text = str(result)
-    lower = text.lower()
-    if any(marker in lower for marker in ["401", "unauthorized", "invalid token", "token invalid", "forbidden"]):
-        return True
-    return any(marker in text for marker in ["Token 无效", "token 无效", "Token已失效", "token已失效", "未授权"])
-
 def is_claim_success_result(result: str) -> bool:
+    """判断领券是否成功（服务器错误视为不确定，不算成功也不算失败）"""
     if is_result_error_message(result):
         return False
     text = str(result)
@@ -1026,7 +1039,15 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         result = await asyncio.wait_for(get_today_recommendation(token), timeout=40)
         
-        # 检查结果是否为空或错误
+        if is_token_invalid_result(result):
+            if progress_msg:
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
+                progress_msg = None
+            await update.message.reply_text("❌ 你的 Token 已失效或无效，请重新发送新的 Token 完成绑定。")
+            return
         if is_result_error_message(result):
             if progress_msg:
                 try:
@@ -1034,7 +1055,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 except Exception:
                     pass
                 progress_msg = None
-            await update.message.reply_text("今天麦当劳 MCP 服务似乎挂了，我暂时没法生成今日推荐，可以稍后再试一次 /today。")
+            await update.message.reply_text("⚠️ 麦当劳服务暂时异常，无法生成今日推荐，请稍后再试 /today。")
             return
         
         # Calculate today in CST (UTC+8)
@@ -1349,9 +1370,15 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(f"🔍 正在验证账号 {name} 的 Token...")
         result = await claim_for_token(new_token, enable_push=False)
         
+        if is_token_invalid_result(result):
+            await update.message.reply_text("❌ Token 无效或已失效，账号未添加。请检查后重试。")
+            return
+        if is_server_error_result(result):
+            await update.message.reply_text("⚠️ 麦当劳服务暂时异常，无法验证 Token，请稍后再试。")
+            return
         if is_result_error_message(result):
-             await update.message.reply_text(f"❌ Token 验证失败，账号未添加。\n错误信息：{result}")
-             return
+            await update.message.reply_text(f"❌ Token 验证失败，账号未添加。\n错误信息：{result}")
+            return
 
         upsert_account(user_id, name, new_token, True)
         save_user_token(user_id, update.effective_user.username, new_token, sync_default_account=False)
@@ -1516,24 +1543,42 @@ async def process_user_claim(application: Application, user_id, token, report_en
 
             logger.info(f"Claiming for user {user_id}")
             result = await claim_for_token(token, enable_push=False)
-            success = is_claim_success_result(result)
             token_invalid = is_token_invalid_result(result)
-            update_claim_stats(user_id, success)
-            if token_invalid:
-                set_auto_claim_enabled(user_id, False)
+            server_error = is_server_error_result(result)
+            success = is_claim_success_result(result)
 
-            # Only send message if report_enabled is True (default 1) or None (treated as True)
+            if token_invalid:
+                update_claim_stats(user_id, False)
+                set_auto_claim_enabled(user_id, False)
+                logger.warning(f"Token invalid for user {user_id}, auto-claim disabled.")
+            elif server_error:
+                logger.warning(f"Server error for user {user_id}, skipping stats update.")
+            else:
+                update_claim_stats(user_id, success)
+
             if report_enabled is None or report_enabled == 1:
-                message = f"🔔 每日自动领券结果：\n\n{result}"
+                display_result = re.sub(r'^\[(TOKEN_ERROR|SERVER_ERROR)\]\s*', '', str(result or ''))
 
                 if token_invalid:
-                    message += "\n\n⚠️ 注意：你的 Token 可能已失效或无效，请重新发送新的 Token 进行绑定。"
-                elif is_result_error_message(result):
-                    message += "\n\n⚠️ 本次领券失败，可能是服务短暂异常，建议稍后手动重试。"
+                    message = (
+                        f"🔔 每日自动领券结果：\n\n{display_result}\n\n"
+                        "❌ 你的 Token 已失效或无效，自动领券已暂停。\n"
+                        "请重新发送新的 Token 完成绑定，然后使用 /autoclaim on 重新开启。"
+                    )
+                elif server_error:
+                    message = (
+                        f"🔔 每日自动领券结果：\n\n{display_result}\n\n"
+                        "⚠️ 麦当劳服务暂时异常，本次领券未执行成功。\n"
+                        "自动领券仍然保持开启，明天会自动重试。"
+                    )
                 elif success:
-                    # Add random quote for successful claims
                     quote = random.choice(MCD_QUOTES)
-                    message += f"\n\n🍟 {quote}"
+                    message = f"🔔 每日自动领券结果：\n\n{display_result}\n\n🍟 {quote}"
+                else:
+                    message = (
+                        f"🔔 每日自动领券结果：\n\n{display_result}\n\n"
+                        "⚠️ 本次领券未能成功，可能没有可领的券或已全部领取。"
+                    )
 
                 await safe_bot_send_message(application.bot, user_id, message)
         except Exception as e:
