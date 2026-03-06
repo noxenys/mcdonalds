@@ -1,0 +1,183 @@
+import httpx
+import json
+import os
+import re
+from tenacity import retry, stop_after_attempt, wait_exponential
+from coupon_utils import get_cst_now, clean_markdown_text
+
+class TelegraphService:
+    BASE_URL = "https://api.telegra.ph"
+
+    def __init__(self, short_name="McdBot", author_name="McDonalds Bot"):
+        self.short_name = short_name
+        self.author_name = author_name
+        self.access_token = None
+        # Try to load token from environment or file if we wanted persistence, 
+        # but for now we can create a new one or keep it in memory.
+        # Ideally, we should cache this token.
+        token_dir = os.path.join("data")
+        if not os.path.exists(token_dir):
+            try:
+                os.makedirs(token_dir)
+            except Exception as e:
+                print(f"Error creating telegraph token directory: {e}")
+                token_dir = "."
+        self.token_file = os.path.join(token_dir, "telegraph_token.json")
+        self._load_token()
+
+    def _load_token(self):
+        if os.path.exists(self.token_file):
+            try:
+                with open(self.token_file, "r") as f:
+                    data = json.load(f)
+                    self.access_token = data.get("access_token")
+            except Exception as e:
+                print(f"Error loading telegraph token: {e}")
+
+    def _save_token(self, token):
+        self.access_token = token
+        try:
+            with open(self.token_file, "w") as f:
+                json.dump({"access_token": token}, f)
+        except Exception as e:
+            print(f"Error saving telegraph token: {e}")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    async def create_account(self):
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.BASE_URL}/createAccount",
+                params={
+                    "short_name": self.short_name,
+                    "author_name": self.author_name
+                }
+            )
+            data = response.json()
+            if data.get("ok"):
+                self._save_token(data["result"]["access_token"])
+                return self.access_token
+            raise Exception(f"Failed to create Telegraph account: {data}")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    async def create_page(self, title, content_nodes):
+        """
+        content_nodes: List of Node objects.
+        Node: String or {'tag': 'p', 'children': ['Hello']}
+        """
+        if not self.access_token:
+            await self.create_account()
+            if not self.access_token:
+                return None
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            content_json = json.dumps(content_nodes)
+            response = await client.post(
+                f"{self.BASE_URL}/createPage",
+                data={
+                    "access_token": self.access_token,
+                    "title": title,
+                    "content": content_json,
+                    "return_content": False
+                }
+            )
+            data = response.json()
+            if data.get("ok"):
+                return data["result"]["url"]
+            raise Exception(f"Failed to create Telegraph page: {data}")
+
+    @staticmethod
+    def _clean_text(text):
+        return clean_markdown_text(text)
+
+    @staticmethod
+    def _extract_date_str(value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            value = str(value)
+        match = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', value)
+        if not match:
+            return None
+        year, month, day = match.groups()
+        return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+
+    @staticmethod
+    def sort_calendar_items(items):
+        if not items:
+            return items
+
+        def key(item):
+            start = item.get("start") or item.get("startDate") or item.get("date") or item.get("begin")
+            end = item.get("end") or item.get("endDate") or item.get("finish")
+            date_str = TelegraphService._extract_date_str(start) or TelegraphService._extract_date_str(end)
+            has_date = 1 if date_str else 0
+            return (has_date, date_str or "")
+
+        return sorted(items, key=key, reverse=True)
+
+    @staticmethod
+    def format_calendar_to_nodes(calendar_data):
+        """
+        Converts calendar data (list of dicts) to Telegraph Nodes.
+        Expected data structure:
+        [
+            {
+                "title": "Campaign Title",
+                "start": "2024-01-01",
+                "end": "2024-01-02",
+                "content": "Description",
+                "image": "http://..."
+            },
+            ...
+        ]
+        """
+        nodes = []
+        
+        # Intro
+        nodes.append({"tag": "p", "children": ["麦当劳近期活动一览："]})
+        nodes.append({"tag": "hr"})
+
+        calendar_items = TelegraphService.sort_calendar_items(calendar_data)
+        for item in calendar_items:
+            # Item Title
+            title = TelegraphService._clean_text(item.get("title", "未知活动"))
+            nodes.append({"tag": "h3", "children": [title]})
+            
+            # Date
+            start = item.get("start", "")
+            end = item.get("end", "")
+            if start or end:
+                date_str = f"{start} - {end}"
+                nodes.append({"tag": "p", "children": [
+                    {"tag": "b", "children": ["活动时间: "]},
+                    date_str
+                ]})
+
+            # Content
+            content = item.get("content") or item.get("desc")
+            if content:
+                nodes.append({"tag": "p", "children": [{"tag": "b", "children": ["活动详情:"]}]})
+                for line in str(content).splitlines():
+                    l = TelegraphService._clean_text(line)
+                    if not l:
+                        continue
+                    nodes.append({"tag": "p", "children": [l]})
+
+            # Image
+            image_url = item.get("image") or item.get("imageUrl") or item.get("img")
+            if image_url:
+                nodes.append({"tag": "figure", "children": [
+                    {"tag": "img", "attrs": {"src": image_url}},
+                    {"tag": "figcaption", "children": ["活动海报"]}
+                ]})
+            
+            nodes.append({"tag": "hr"})
+
+
+        cst_now = get_cst_now()
+        footer_time = cst_now.strftime("%Y-%m-%d %H:%M")
+        nodes.append({"tag": "hr"})
+        nodes.append({"tag": "p", "children": [
+            {"tag": "i", "children": [f"Generated by McdBot • {footer_time}"]}
+        ]})
+        return nodes
